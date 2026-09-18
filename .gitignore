@@ -32,3 +32,6 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Local agent rules
+.agents/rules/cloudflare_free_tier.md
