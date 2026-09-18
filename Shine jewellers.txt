@@ -1,0 +1,83 @@
+Shine jewellers
+Future Expansion Plan — Jewelry Catalogue Platform
+
+The current architecture should remain unchanged for the initial deployment. Future expansion should happen **only when actual usage justifies it**, rather than over-engineering v1.
+
+### 1. More clients / organizations
+
+* Keep the application **multi-tenant** using `organization_id`.
+* Each client gets isolated catalogue, vendors, users, images, and history.
+* Strengthen tenant-level authorization and R2 object isolation as client count grows.
+
+### 2. More iPads / salespeople
+
+* Continue using the same cloud-source-of-truth model.
+* Each iPad maintains its own offline replica.
+* Sync only changes rather than repeatedly downloading the full catalogue.
+* Introduce more sophisticated sync conflict handling if concurrent editing becomes significant.
+
+### 3. Larger catalogues
+
+If a client's catalogue grows substantially beyond 10,000–50,000 items:
+
+* Optimize D1 indexes and queries.
+* Improve local SQLite indexing/search.
+* Optimize image download scheduling and cache management.
+* Benchmark storage and performance again before changing architecture.
+
+### 4. Higher cloud usage
+
+If R2/D1/Worker usage becomes large enough that current limits or economics become problematic:
+
+* Move to appropriate paid tiers.
+* Increase Worker/API capacity where required.
+* Keep R2 as the image object store unless there is a demonstrated reason to replace it.
+
+### 5. Native iPad application
+
+If PWA limitations become a real problem:
+
+* Keep the **React frontend**.
+* Wrap/reuse it with **Capacitor**.
+* Replace browser storage with native SQLite/filesystem where necessary.
+* Keep the cloud architecture largely unchanged.
+
+This is important: **native migration should be a storage/runtime change, not a complete rewrite.**
+
+### 6. Enterprise features
+
+Once there are enough paying clients:
+
+* Advanced user roles and permissions.
+* Manager/admin dashboards.
+* Audit logs.
+* Client-specific branding.
+* Custom PDF templates.
+* More sophisticated reporting and analytics.
+
+### 7. Backup and disaster recovery
+
+As the number of clients increases:
+
+* Automate scheduled Google Drive backups.
+* Add backup verification.
+* Potentially introduce an additional independent backup destination for higher-value enterprise customers.
+
+### 8. Operational infrastructure
+
+Only when justified by scale:
+
+* Monitoring and alerting.
+* Automated integrity checks.
+* Error tracking.
+* Automated health checks for Worker/R2/D1.
+* Deployment environments such as staging + production.
+* Automated database migration/versioning.
+
+### Expansion principle
+
+**Do not redesign the architecture just because the number of clients increases.** First scale the existing components, measure the actual bottleneck, and only replace a component when a real limitation is demonstrated.
+
+**Current architecture → scale vertically/within existing services → measure → replace only the bottleneck.**
+
+That keeps v1 inexpensive and simple while ensuring the initial design doesn't block future growth.
