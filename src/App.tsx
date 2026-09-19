@@ -61,6 +61,47 @@ export function App(){
  const filtered=useMemo(()=>{const minMg=minWeight!==''?Math.round(Number(minWeight)*1000):0,maxMg=maxWeight!==''?Math.round(Number(maxWeight)*1000):Infinity;return products.filter(p=>!p.deleted&&p.designCode.toLowerCase().includes(query.trim().toLowerCase())&&(!category||p.categoryId===category)&&(!subcategory||p.subcategoryId===subcategory)&&p.weightMg>=minMg&&p.weightMg<=maxMg)},[products,query,category,subcategory,minWeight,maxWeight])
  const clearFilters=()=>{setQuery('');setCategory('');setSubcategory('');setMinWeight('');setMaxWeight('')}
  const applyWeightPreset=(min:string,max:string)=>{setMinWeight(min);setMaxWeight(max)}
+ const detailIndex = detail ? filtered.findIndex(p => p.id === detail.id) : -1
+ const activeList = detailIndex !== -1 ? filtered : products
+ const activeIndex = detail ? activeList.findIndex(p => p.id === detail.id) : -1
+ const hasPrev = activeIndex > 0
+ const hasNext = activeIndex >= 0 && activeIndex < activeList.length - 1
+ const goPrev = () => { if (hasPrev) setDetail(activeList[activeIndex - 1]) }
+ const goNext = () => { if (hasNext) setDetail(activeList[activeIndex + 1]) }
+ const touchStartX = useRef<number | null>(null)
+ const touchStartY = useRef<number | null>(null)
+ const handleTouchStart = (e: React.TouchEvent) => {
+  touchStartX.current = e.touches[0].clientX
+  touchStartY.current = e.touches[0].clientY
+ }
+ const handleTouchEnd = (e: React.TouchEvent) => {
+  if (touchStartX.current === null || touchStartY.current === null) return
+  const deltaX = e.changedTouches[0].clientX - touchStartX.current
+  const deltaY = e.changedTouches[0].clientY - touchStartY.current
+  touchStartX.current = null
+  touchStartY.current = null
+  if (Math.abs(deltaX) > 40 && Math.abs(deltaX) > Math.abs(deltaY)) {
+   if (deltaX < 0) goNext()
+   else goPrev()
+  }
+ }
+ useEffect(() => {
+  if (!detail) return
+  const handleKeyDown = (e: KeyboardEvent) => {
+   if (e.key === 'ArrowRight') {
+    e.preventDefault()
+    goNext()
+   } else if (e.key === 'ArrowLeft') {
+    e.preventDefault()
+    goPrev()
+   } else if (e.key === 'Escape') {
+    e.preventDefault()
+    setDetail(null)
+   }
+  }
+  window.addEventListener('keydown', handleKeyDown)
+  return () => window.removeEventListener('keydown', handleKeyDown)
+ }, [detail, activeIndex, activeList, hasPrev, hasNext])
  const load=async()=>{const [p,c,s,v,o,b,cp,pending]=await Promise.all([storage.products(),storage.categories(),storage.subcategories(),storage.vendors(),storage.orders(),storage.storageBytes(),storage.syncCheckpoint(),storage.pendingOperations()]);setProducts(p);setCategories(c);setSubcategories(s);setVendors(v);setOrders(o);setBytes(b);setSyncCheckpointVal(cp);setPendingCount(pending.length)}
  const loadCloudStorage=async()=>{const saved=sessionStorage.getItem(sessionKey);if(!saved)return;try{setCloudBytes(await cloudImageStorageBytes((JSON.parse(saved) as {token:string}).token))}catch{setCloudBytes(null)}}
  const loadDevices=async()=>{const saved=sessionStorage.getItem(sessionKey);if(!saved)return;try{const list=await workerApi<{id:string;device_id:string;device_name:string;last_seen_at:string;offline_authorization_expires_at:string;revoked_at:string|null}[]>('/devices',{token:(JSON.parse(saved) as {token:string}).token});setDevices(list)}catch(err){setNotice(err instanceof Error?err.message:'Unable to load devices')}}
@@ -165,6 +206,68 @@ export function App(){
  {view==='history'&&<main className="single-view"><p className="eyebrow">synchronized history</p><h1>Orders retain their original details.</h1><div className="history">{orders.length?orders.map(o=><article key={o.id}><div><strong>#{String(o.orderNumber).padStart(4,'0')} · {o.vendor.name}</strong><span>{new Date(o.generatedAt||o.createdAt).toLocaleString()} · {o.salesperson}</span></div><b>{o.items.reduce((n,i)=>n+i.quantity,0)} pcs · {grams(o.items.reduce((n,i)=>n+i.weightMg*i.quantity,0))} g</b><details><summary>View design snapshots</summary>{o.items.map(i=><p key={i.productId}>{i.designCode} · {i.category}/{i.subcategory} · {i.quantity} × {grams(i.weightMg)} g</p>)}</details></article>):<p className="muted">No finalized orders on this device yet.</p>}</div></main>}
  {view==='storage'&&<main className="single-view storage"><div className="section-title"><div><p className="eyebrow">device replica</p><h1>Storage &amp; synchronization</h1></div><span>Checkpoint #{syncCheckpointVal}</span></div><div className="storage-card"><strong>{cloudBytes===null?'—':(cloudBytes/1024).toFixed(1)+' KB'}</strong><span>Cloud R2 catalogue images</span><p>Calculated from the authenticated organization’s confirmed grid/detail image metadata. This is the cloud catalogue total, not a browser cache estimate.</p><strong>{(bytes/1024).toFixed(1)} KB</strong><span>This device’s OPFS image replica</span><p>Images saved while working offline are counted here separately and remain on this device until explicitly cleared.</p><div style={{display:'flex',gap:'10px',alignItems:'center',padding:'8px 0'}}><span>Offline queue:</span><strong>{pendingCount} operation(s) pending sync</strong>{pendingCount>0&&<button className="quiet" style={{minHeight:'28px',padding:'0 8px',fontSize:'12px'}} onClick={async()=>{await storage.clearPendingOperations();await load();setNotice('Pending operations queue cleared.')}}>Clear queue</button>}</div><button className="primary" disabled={syncing||!online} onClick={()=>void triggerSync()}>{syncing?'Synchronizing…':'Run Full Synchronization'}</button><button className="quiet" disabled={recovering||!online} onClick={()=>void triggerImageRecovery()}>{recovering?'Recovering images…':'Scan & Recover Missing Images'}</button><button className="quiet" disabled={uploading||!online} onClick={()=>void uploadImages()}>{uploading?'Uploading pending images…':'Upload pending product images'}</button><button className="quiet" onClick={()=>{void load();void loadCloudStorage()}}>Refresh storage estimate</button></div></main>}
  {view==='devices'&&session.role==='ADMIN'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">security &amp; administration</p><h1>Authorized Device Sessions</h1></div><span>{devices.length} registered</span></div><div className="records">{devices.map(d=><article key={d.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><div><strong>{d.device_name}</strong><span>Device ID: {d.device_id}</span><small>Last seen: {new Date(d.last_seen_at).toLocaleString()} · Expires: {new Date(d.offline_authorization_expires_at).toLocaleDateString()}</small>{d.revoked_at&&<span style={{color:'var(--danger)'}}>Revoked on {new Date(d.revoked_at).toLocaleString()}</span>}</div>{!d.revoked_at&&<button className="quiet" style={{color:'var(--danger)',borderColor:'var(--danger)'}} onClick={()=>void revokeDevice(d.id)}>Revoke access</button>}</article>)}</div></main>}
- {detail&&<div className="modal" role="dialog" aria-modal="true" aria-label={`${detail.designCode} details`}><button className="close" onClick={()=>setDetail(null)} aria-label="Close detail">×</button><img src={detail.detailImage} alt={`${detail.designCode} detailed jewelry view`} /><div><p className="eyebrow">local detail image</p><h2>{detail.designCode}</h2><p>{grams(detail.weightMg)} g · {categories.find(c=>c.id===detail.categoryId)?.name}</p><button className="primary" onClick={()=>{toggle(detail.id);setDetail(null)}}>{selected[detail.id]?'Remove selection':'Select design'}</button></div></div>}
+  {detail && (
+   <div
+    className="modal"
+    role="dialog"
+    aria-modal="true"
+    aria-label={`${detail.designCode} details`}
+    onTouchStart={handleTouchStart}
+    onTouchEnd={handleTouchEnd}
+   >
+    <button className="close" onClick={() => setDetail(null)} aria-label="Close detail">×</button>
+    <div className="modal-stage">
+     <button
+      type="button"
+      className="modal-nav prev"
+      onClick={goPrev}
+      disabled={!hasPrev}
+      aria-label="Previous design"
+      title="Previous design (← arrow key)"
+     >
+      &lsaquo;
+     </button>
+     <img
+      key={detail.id}
+      src={detail.detailImage}
+      alt={`${detail.designCode} detailed jewelry view`}
+      loading="eager"
+     />
+     <button
+      type="button"
+      className="modal-nav next"
+      onClick={goNext}
+      disabled={!hasNext}
+      aria-label="Next design"
+      title="Next design (→ arrow key)"
+     >
+      &rsaquo;
+     </button>
+    </div>
+    <div className="modal-info">
+     <div className="modal-header-meta">
+      <span className="modal-index-badge">
+       {activeIndex !== -1 ? `Item ${activeIndex + 1} of ${activeList.length}` : 'Design Preview'}
+      </span>
+     </div>
+     <div>
+      <p className="eyebrow">high-resolution detail view</p>
+      <h2>{detail.designCode}</h2>
+     </div>
+     <p style={{ margin: 0, fontSize: '15px', color: 'var(--paper)' }}>
+      <strong>{grams(detail.weightMg)} g</strong> &middot; {categories.find(c => c.id === detail.categoryId)?.name || 'Jewelry'}
+      {subcategories.find(s => s.id === detail.subcategoryId)?.name ? ` / ${subcategories.find(s => s.id === detail.subcategoryId)?.name}` : ''}
+     </p>
+     <button
+      type="button"
+      className="primary"
+      style={{ marginTop: 'var(--space-2)' }}
+      onClick={() => toggle(detail.id)}
+     >
+      {selected[detail.id] ? '✓ Selected in Order (Click to Remove)' : '+ Select Design for Order'}
+     </button>
+    </div>
+   </div>
+  )}
  <footer>Built by Aadit Mehta, contact mail: <a href="mailto:aaditbusiness15@gmail.com">aaditbusiness15@gmail.com</a></footer></div>
 }
