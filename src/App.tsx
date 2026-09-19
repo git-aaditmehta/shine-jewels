@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { login, workerApi } from './api'
-import { cloudImageStorageBytes, initialDownload, recoverMissingImages, synchronize, uploadPendingProductImages, uploadProductOnline } from './sync'
+import { cloudImageStorageBytes, initialDownload, push, recoverMissingImages, synchronize, uploadPendingProductImages } from './sync'
 import { generateOrderPdf } from './pdf'
 import { storage } from './storage'
 import type { Category, Order, Product, Session, Subcategory, Vendor } from './types'
@@ -57,44 +57,76 @@ export function App(){
  const toggle=(id:string)=>setSelected(x=>x[id]?Object.fromEntries(Object.entries(x).filter(([k])=>k!==id)):{...x,[id]:{quantity:1,remark:''}})
  const change=(id:string,key:'quantity'|'remark',value:string)=>setSelected(s=>({...s,[id]:{...s[id], [key]:key==='quantity'?Math.max(1,Number(value)||1):value}}))
  const makeOrder=async()=>{const vendor=vendors.find(v=>v.id===vendorId);const picks=products.filter(p=>selected[p.id]); if(!vendor){setNotice('Select a vendor before reviewing the order.');return} if(!picks.length){setNotice('Select at least one design.');return};const max=Math.max(0,...orders.map(o=>o.orderNumber||0));const order:Order={id:uid(),orderNumber:max+1,vendor,salesperson:session?.displayName||'Salesperson',status:'FINALIZED',createdAt:new Date().toISOString(),generatedAt:new Date().toISOString(),items:picks.map((p,index)=>({productId:p.id,serialNumber:index+1,designCode:p.designCode,category:categories.find(c=>c.id===p.categoryId)?.name||'',subcategory:subcategories.find(s=>s.id===p.subcategoryId)?.name||'',weightMg:p.weightMg,quantity:selected[p.id].quantity,remark:selected[p.id].remark,image:p.gridImage}))};await storage.saveOrder(order);setOrders(o=>[order,...o]);await generateOrderPdf(order);setSelected({});await load();setNotice(`Order #${order.orderNumber} finalized locally. PDF download started.`)}
- const addVendor=async(e:React.FormEvent<HTMLFormElement>)=>{e.preventDefault();const fd=new FormData(e.currentTarget),name=String(fd.get('name')||'').trim(),city=String(fd.get('city')||'').trim(),address=String(fd.get('address')||'').trim(),type=String(fd.get('type')||'WHOLESALE') as Vendor['type'];if(!name||!city||!address){setNotice('Vendor name, business address and city are required.');return};if(vendors.some(v=>v.name.trim().toLowerCase()===name.toLowerCase()&&v.city.trim().toLowerCase()===city.toLowerCase())){setNotice('A vendor with this name and city already exists.');return};const v={id:uid(),name,address,city,type};await storage.saveVendor(v);await load();e.currentTarget.reset();setNotice('Vendor saved locally.')}
+ const addVendor=async(e:React.FormEvent<HTMLFormElement>)=>{e.preventDefault();const form=e.currentTarget;const fd=new FormData(form),name=String(fd.get('name')||'').trim(),city=String(fd.get('city')||'').trim(),address=String(fd.get('address')||'').trim(),type=String(fd.get('type')||'WHOLESALE') as Vendor['type'];if(!name||!city||!address){setNotice('Vendor name, business address and city are required.');return};if(vendors.some(v=>v.name.trim().toLowerCase()===name.toLowerCase()&&v.city.trim().toLowerCase()===city.toLowerCase())){setNotice('A vendor with this name and city already exists.');return};form.reset();const v={id:uid(),name,address,city,type};await storage.saveVendor(v);await load();setNotice('Vendor saved locally.')}
+ const uploadingRef = useRef(false)
+ const triggerBackgroundUpload = () => {
+  const saved = sessionStorage.getItem(sessionKey);
+  if (!saved || !navigator.onLine) return;
+  const token = (JSON.parse(saved) as { token: string }).token;
+  if (uploadingRef.current || syncing) return;
+  uploadingRef.current = true;
+  setUploading(true);
+
+  (async () => {
+   let uploaded = 0;
+   let lastError = '';
+   try {
+    while (navigator.onLine) {
+     const pending = (await storage.pendingOperations()).filter(op => op.entity_type === 'product');
+     if (pending.length === 0) break;
+     const op = pending[0];
+     try {
+      const res = await push(token, op);
+      await storage.completeOperation(op.id);
+      if (res) {
+       uploaded++;
+       await load();
+       await loadCloudStorage();
+       setNotice(`Cloud upload in progress: ${uploaded} design(s) uploaded to R2…`);
+      }
+     } catch (err) {
+      lastError = err instanceof Error ? err.message : 'Upload failed';
+      console.warn('Background upload failed for item:', op.id, err);
+      await storage.completeOperation(op.id, lastError);
+      break;
+     }
+    }
+   } finally {
+    uploadingRef.current = false;
+    setUploading(false);
+    await load();
+    await loadCloudStorage();
+    if (lastError) {
+     setNotice(`Upload stopped: ${lastError}. Design remains in local queue for retry.`);
+    } else if (uploaded > 0) {
+     setNotice(`Cloud upload completed: ${uploaded} design(s) successfully uploaded to R2 and synchronized.`);
+    }
+   }
+  })();
+ };
  const stageProduct=async(product:Product)=>{
   if(products.some(p=>p.designCode.toLowerCase()===product.designCode.toLowerCase())){
    setNotice(`Design code ${product.designCode} already exists. The draft image remains available for retry.`);
    return
   };
-  const saved=sessionStorage.getItem(sessionKey);
-  const token=saved?(JSON.parse(saved) as {token:string}).token:'';
-  const isOnline=navigator.onLine&&Boolean(token);
-
-  if(!isOnline){
-   try{
-    await storage.saveProduct({...product,syncState:'PENDING_UPLOAD'},true);
-    await load();
-    setNotice(`${product.designCode} staged locally (offline). It will sync automatically when online.`);
-   }catch(error){
-    setNotice(error instanceof Error?`Image could not be saved on this device: ${error.message}`:'Image could not be saved on this device.')
-   }
-   return
-  }
 
   try{
-   await storage.saveProduct({...product,syncState:'PENDING_UPLOAD'},false);
+   await storage.saveProduct({...product,syncState:'PENDING_UPLOAD'},true);
    await load();
-   setNotice(`Uploading ${product.designCode} directly to cloud storage (R2)…`);
-   try{
-    await uploadProductOnline(token,product.id);
-    await load();
-    await loadCloudStorage();
-    setNotice(`${product.designCode} uploaded directly to R2 and synchronized.`);
-   }catch(uploadErr){
-    console.warn('Online direct upload failed, falling back to offline queue:',uploadErr);
-    await storage.saveProduct({...product,syncState:'PENDING_UPLOAD'},true);
-    await load();
-    setNotice(`${product.designCode} saved locally. Cloud upload failed (${uploadErr instanceof Error?uploadErr.message:'network issue'}); queued for sync.`);
+
+   const saved=sessionStorage.getItem(sessionKey);
+   const token=saved?(JSON.parse(saved) as {token:string}).token:'';
+   const isOnline=navigator.onLine&&Boolean(token);
+
+   if(!isOnline){
+    setNotice(`${product.designCode} saved locally (offline). It will sync automatically when online.`);
+    return
    }
+
+   setNotice(`${product.designCode} saved locally. Uploading to cloud in background…`);
+   triggerBackgroundUpload();
   }catch(error){
-   setNotice(error instanceof Error?`Could not save product: ${error.message}`:'Could not save product.')
+   setNotice(error instanceof Error?`Image could not be saved on this device: ${error.message}`:'Image could not be saved on this device.')
   }
  }
  const addCategory=async(c:Category)=>{await storage.saveCategory(c);await load()}
@@ -104,7 +136,7 @@ export function App(){
  const commonViews:View[]=['catalogue','history','vendors','products','batch','taxonomy','storage']
  const views=(session.role==='ADMIN'?[...commonViews,'devices']:commonViews) as View[]
  const logout=()=>{sessionStorage.removeItem(sessionKey);void storage.clearSession();setSession(null)}
- return <div className="app-shell"><header><div className="brand"><span className="mark">S</span><div><strong>shine jewels</strong><small>{session.role==='ADMIN'?'administrator':'sales catalogue'}</small></div></div><div className="session-actions"><div className="connection" style={{color:online?(syncing?'var(--gold)':'var(--green)'):'var(--muted)'}}><i style={{background:online?(syncing?'var(--gold)':'var(--green)'):'var(--muted)'}}/> {online?(syncing?'Syncing…':`Online · ${session.displayName}`):`Offline · ${session.displayName}`}</div><button className="quiet logout" onClick={logout}>Log out</button></div></header>
+ return <div className="app-shell"><header><div className="brand"><span className="mark">S</span><div><strong>shine jewels</strong><small>{session.role==='ADMIN'?'administrator':'sales catalogue'}</small></div></div><div className="session-actions"><div className="connection" style={{color:online?((syncing||uploading)?'var(--gold)':'var(--green)'):'var(--muted)'}}><i style={{background:online?((syncing||uploading)?'var(--gold)':'var(--green)'):'var(--muted)'}}/> {online?((syncing||uploading)?(syncing?'Syncing…':'Uploading…'):`Online · ${session.displayName}`):`Offline · ${session.displayName}`}</div><button className="quiet logout" onClick={logout}>Log out</button></div></header>
  <nav aria-label="Primary navigation">{views.map(item=><button key={item} className={view===item?'active':''} onClick={()=>setView(item)}>{item}</button>)}</nav>
  {notice&&<div className="notice" role="status">{notice}<button onClick={()=>setNotice('')} aria-label="Dismiss message">×</button></div>}
  <main className="catalogue-layout" style={{display:view==='catalogue'?undefined:'none'}}><section className="catalogue"><div className="section-title"><div><p className="eyebrow">design library</p><h1>Find the right piece, without waiting.</h1></div><span>{filtered.length} designs</span></div><div className="filters"><label>Search design code<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="e.g. SJ-1001" /></label><label>Category<select value={category} onChange={e=>{setCategory(e.target.value);setSubcategory('')}}><option value="">All categories</option>{categories.map(c=><option value={c.id} key={c.id}>{c.name}</option>)}</select></label><label>Subcategory<select value={subcategory} onChange={e=>setSubcategory(e.target.value)}><option value="">All subcategories</option>{subcategories.filter(s=>!category||s.categoryId===category).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label><button className="quiet" onClick={()=>{setQuery('');setCategory('');setSubcategory('')}}>Clear filters</button></div>

@@ -67,13 +67,34 @@ export async function computeSha256(data: string | ArrayBuffer): Promise<string>
   return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-async function directUpload(token: string, productId: string, representation: 'grid' | 'detail', source: string, version: number) {
-  const blob = await (await fetch(source)).blob()
-  const checksum = await computeSha256(source)
+export async function sourceToBlobAndChecksum(source: string): Promise<{ blob: Blob; checksum: string; contentType: string }> {
+  if (source.startsWith('data:')) {
+    const parts = source.split(',')
+    const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/jpeg'
+    const binary = atob(parts[1] || '')
+    const len = binary.length
+    const u8arr = new Uint8Array(len)
+    for (let i = 0; i < len; i++) {
+      u8arr[i] = binary.charCodeAt(i)
+    }
+    const checksum = await computeSha256(u8arr.buffer)
+    const blob = new Blob([u8arr], { type: mime })
+    return { blob, checksum, contentType: mime }
+  }
+  const res = await fetch(source)
+  if (!res.ok) throw new Error(`Could not load image resource (${res.status}).`)
+  const blob = await res.blob()
+  const buffer = await blob.arrayBuffer()
+  const checksum = await computeSha256(buffer)
+  return { blob, checksum, contentType: blob.type || 'image/jpeg' }
+}
+
+async function directUpload(token: string, productId: string, representation: 'grid' | 'detail', source: string, version: number, precomputed?: { blob: Blob; checksum: string; contentType: string }) {
+  const { blob, checksum, contentType } = precomputed || await sourceToBlobAndChecksum(source)
   const grant = await workerApi<{ key: string; headers: Record<string, string>; url: string; sizeBytes: number; checksum: string }>('/images/upload-authorizations', {
     method: 'POST',
     token,
-    body: { productId, representation, imageVersion: version, sizeBytes: blob.size, checksum, contentType: blob.type || 'image/jpeg' }
+    body: { productId, representation, imageVersion: version, sizeBytes: blob.size, checksum, contentType }
   })
   const response = await fetch(grant.url, { method: 'PUT', headers: grant.headers, body: blob })
   if (!response.ok) throw new Error(`Direct ${representation} upload failed with status ${response.status}.`)
@@ -104,9 +125,17 @@ export async function uploadProductOnline(token: string, productId: string): Pro
   const finalItem = (await storage.products()).find(x => x.id === productId)
   if (!finalItem) throw new Error('Product lost during subcategory remap.')
 
+  let gridPre: { blob: Blob; checksum: string; contentType: string } | undefined
+  let detailPre: { blob: Blob; checksum: string; contentType: string } | undefined
+  if (finalItem.gridImage === finalItem.detailImage && finalItem.gridImage) {
+    const shared = await sourceToBlobAndChecksum(finalItem.gridImage)
+    gridPre = shared
+    detailPre = shared
+  }
+
   const [gridImage, detailImage] = await Promise.all([
-    directUpload(token, finalItem.id, 'grid', finalItem.gridImage, finalItem.imageVersion),
-    directUpload(token, finalItem.id, 'detail', finalItem.detailImage, finalItem.imageVersion)
+    directUpload(token, finalItem.id, 'grid', finalItem.gridImage, finalItem.imageVersion, gridPre),
+    directUpload(token, finalItem.id, 'detail', finalItem.detailImage, finalItem.imageVersion, detailPre)
   ])
   const res = await workerApi<Product & { id: string }>('/products', {
     method: 'POST',
@@ -132,7 +161,7 @@ export async function uploadProductOnline(token: string, productId: string): Pro
   return res
 }
 
-async function push(token: string, operation: Awaited<ReturnType<typeof storage.pendingOperations>>[number]) {
+export async function push(token: string, operation: Awaited<ReturnType<typeof storage.pendingOperations>>[number]) {
   const payload = JSON.parse(operation.payload) as Record<string, unknown>
   if (operation.entity_type === 'category') return workerApi('/categories', { method: 'POST', token, body: payload })
   if (operation.entity_type === 'subcategory') return workerApi('/subcategories', { method: 'POST', token, body: payload })
