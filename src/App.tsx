@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { login, workerApi } from './api'
-import { cloudImageStorageBytes, initialDownload, recoverMissingImages, synchronize, uploadPendingProductImages } from './sync'
+import { cloudImageStorageBytes, initialDownload, recoverMissingImages, synchronize, uploadPendingProductImages, uploadProductOnline } from './sync'
 import { generateOrderPdf } from './pdf'
 import { storage } from './storage'
 import type { Category, Order, Product, Session, Subcategory, Vendor } from './types'
@@ -58,7 +58,45 @@ export function App(){
  const change=(id:string,key:'quantity'|'remark',value:string)=>setSelected(s=>({...s,[id]:{...s[id], [key]:key==='quantity'?Math.max(1,Number(value)||1):value}}))
  const makeOrder=async()=>{const vendor=vendors.find(v=>v.id===vendorId);const picks=products.filter(p=>selected[p.id]); if(!vendor){setNotice('Select a vendor before reviewing the order.');return} if(!picks.length){setNotice('Select at least one design.');return};const max=Math.max(0,...orders.map(o=>o.orderNumber||0));const order:Order={id:uid(),orderNumber:max+1,vendor,salesperson:session?.displayName||'Salesperson',status:'FINALIZED',createdAt:new Date().toISOString(),generatedAt:new Date().toISOString(),items:picks.map((p,index)=>({productId:p.id,serialNumber:index+1,designCode:p.designCode,category:categories.find(c=>c.id===p.categoryId)?.name||'',subcategory:subcategories.find(s=>s.id===p.subcategoryId)?.name||'',weightMg:p.weightMg,quantity:selected[p.id].quantity,remark:selected[p.id].remark,image:p.gridImage}))};await storage.saveOrder(order);setOrders(o=>[order,...o]);await generateOrderPdf(order);setSelected({});await load();setNotice(`Order #${order.orderNumber} finalized locally. PDF download started.`)}
  const addVendor=async(e:React.FormEvent<HTMLFormElement>)=>{e.preventDefault();const fd=new FormData(e.currentTarget),name=String(fd.get('name')||'').trim(),city=String(fd.get('city')||'').trim(),address=String(fd.get('address')||'').trim(),type=String(fd.get('type')||'WHOLESALE') as Vendor['type'];if(!name||!city||!address){setNotice('Vendor name, business address and city are required.');return};if(vendors.some(v=>v.name.trim().toLowerCase()===name.toLowerCase()&&v.city.trim().toLowerCase()===city.toLowerCase())){setNotice('A vendor with this name and city already exists.');return};const v={id:uid(),name,address,city,type};await storage.saveVendor(v);await load();e.currentTarget.reset();setNotice('Vendor saved locally.')}
- const stageProduct=async(product:Product)=>{if(products.some(p=>p.designCode.toLowerCase()===product.designCode.toLowerCase())){setNotice(`Design code ${product.designCode} already exists. The draft image remains available for retry.`);return};try{await storage.saveProduct(product);await load();setNotice(`${product.designCode} saved on this device.`)}catch(error){setNotice(error instanceof Error?`Image could not be saved on this device: ${error.message}`:'Image could not be saved on this device.')}}
+ const stageProduct=async(product:Product)=>{
+  if(products.some(p=>p.designCode.toLowerCase()===product.designCode.toLowerCase())){
+   setNotice(`Design code ${product.designCode} already exists. The draft image remains available for retry.`);
+   return
+  };
+  const saved=sessionStorage.getItem(sessionKey);
+  const token=saved?(JSON.parse(saved) as {token:string}).token:'';
+  const isOnline=navigator.onLine&&Boolean(token);
+
+  if(!isOnline){
+   try{
+    await storage.saveProduct({...product,syncState:'PENDING_UPLOAD'},true);
+    await load();
+    setNotice(`${product.designCode} staged locally (offline). It will sync automatically when online.`);
+   }catch(error){
+    setNotice(error instanceof Error?`Image could not be saved on this device: ${error.message}`:'Image could not be saved on this device.')
+   }
+   return
+  }
+
+  try{
+   await storage.saveProduct({...product,syncState:'PENDING_UPLOAD'},false);
+   await load();
+   setNotice(`Uploading ${product.designCode} directly to cloud storage (R2)…`);
+   try{
+    await uploadProductOnline(token,product.id);
+    await load();
+    await loadCloudStorage();
+    setNotice(`${product.designCode} uploaded directly to R2 and synchronized.`);
+   }catch(uploadErr){
+    console.warn('Online direct upload failed, falling back to offline queue:',uploadErr);
+    await storage.saveProduct({...product,syncState:'PENDING_UPLOAD'},true);
+    await load();
+    setNotice(`${product.designCode} saved locally. Cloud upload failed (${uploadErr instanceof Error?uploadErr.message:'network issue'}); queued for sync.`);
+   }
+  }catch(error){
+   setNotice(error instanceof Error?`Could not save product: ${error.message}`:'Could not save product.')
+  }
+ }
  const addCategory=async(c:Category)=>{await storage.saveCategory(c);await load()}
  const addSubcategory=async(s:Subcategory)=>{await storage.saveSubcategory(s);await load()}
  const cart=products.filter(p=>selected[p.id]); const total=cart.reduce((n,p)=>n+p.weightMg*selected[p.id].quantity,0)
@@ -72,8 +110,8 @@ export function App(){
  <main className="catalogue-layout" style={{display:view==='catalogue'?undefined:'none'}}><section className="catalogue"><div className="section-title"><div><p className="eyebrow">design library</p><h1>Find the right piece, without waiting.</h1></div><span>{filtered.length} designs</span></div><div className="filters"><label>Search design code<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="e.g. SJ-1001" /></label><label>Category<select value={category} onChange={e=>{setCategory(e.target.value);setSubcategory('')}}><option value="">All categories</option>{categories.map(c=><option value={c.id} key={c.id}>{c.name}</option>)}</select></label><label>Subcategory<select value={subcategory} onChange={e=>setSubcategory(e.target.value)}><option value="">All subcategories</option>{subcategories.filter(s=>!category||s.categoryId===category).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label><button className="quiet" onClick={()=>{setQuery('');setCategory('');setSubcategory('')}}>Clear filters</button></div>
  <div className="grid">{filtered.map(product=><article className={'product '+(selected[product.id]?'chosen':'')} key={product.id}><button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><img src={product.gridImage} alt={`${product.designCode} jewelry design`} loading="eager" decoding="async" /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div><button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button></div></article>)}</div></section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label><div className="line"/>{cart.length===0?<p className="muted">Select designs from the catalogue. Your work stays on this device when offline.</p>:<div className="cart">{cart.map(p=><div className="cart-item" key={p.id}><img src={p.gridImage} alt="" /><div><strong>{p.designCode}</strong><span>{grams(p.weightMg)} g</span><label>Qty<input aria-label={`Quantity for ${p.designCode}`} type="number" min="1" step="1" value={selected[p.id].quantity} onChange={e=>change(p.id,'quantity',e.target.value)} /></label><input aria-label={`Remark for ${p.designCode}`} value={selected[p.id].remark} onChange={e=>change(p.id,'remark',e.target.value)} placeholder="Optional remark" /></div></div>)}</div>}<div className="total"><span>Total weight</span><strong>{grams(total)} g</strong></div><button className="primary" onClick={()=>void makeOrder()}>Finalize &amp; generate PDF</button><small>PDF is generated locally. Cloud sync follows when connected.</small></aside></main>
  {view==='vendors'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">vendor directory</p><h1>Vendors for every order.</h1></div></div><div className="management"><form onSubmit={addVendor}><h2>Add vendor</h2><label>Name<input name="name" required /></label><label>Business address<input name="address" required /></label><label>City<input name="city" required /></label><label>Type<select name="type"><option>WHOLESALE</option><option>RETAIL</option><option>CORPORATE</option></select></label><button className="primary">Save vendor</button></form><div className="records">{vendors.map(v=><article key={v.id}><strong>{v.name}</strong><span>{v.address}, {v.city}</span><small>{v.type}</small></article>)}</div></div></main>}
- {view==='products'&&<main className="single-view"><p className="eyebrow">catalogue administration</p><h1>Stage a single design with confidence.</h1><ProductEntry categories={categories} subcategories={subcategories} onProduct={stageProduct} notice={setNotice}/></main>}
- {view==='batch'&&<main className="single-view"><BatchEntry categories={categories} subcategories={subcategories} onProduct={stageProduct} notice={setNotice}/></main>}
+ {view==='products'&&<main className="single-view"><p className="eyebrow">catalogue administration</p><h1>Stage a single design with confidence.</h1><ProductEntry categories={categories} subcategories={subcategories} onProduct={stageProduct}/></main>}
+ {view==='batch'&&<main className="single-view"><BatchEntry categories={categories} subcategories={subcategories} onProduct={stageProduct}/></main>}
  {view==='taxonomy'&&<main className="single-view"><Taxonomy categories={categories} subcategories={subcategories} onCategory={addCategory} onSubcategory={addSubcategory} notice={setNotice}/></main>}
  {view==='history'&&<main className="single-view"><p className="eyebrow">synchronized history</p><h1>Orders retain their original details.</h1><div className="history">{orders.length?orders.map(o=><article key={o.id}><div><strong>#{String(o.orderNumber).padStart(4,'0')} · {o.vendor.name}</strong><span>{new Date(o.generatedAt||o.createdAt).toLocaleString()} · {o.salesperson}</span></div><b>{o.items.reduce((n,i)=>n+i.quantity,0)} pcs · {grams(o.items.reduce((n,i)=>n+i.weightMg*i.quantity,0))} g</b><details><summary>View design snapshots</summary>{o.items.map(i=><p key={i.productId}>{i.designCode} · {i.category}/{i.subcategory} · {i.quantity} × {grams(i.weightMg)} g</p>)}</details></article>):<p className="muted">No finalized orders on this device yet.</p>}</div></main>}
  {view==='storage'&&<main className="single-view storage"><div className="section-title"><div><p className="eyebrow">device replica</p><h1>Storage &amp; synchronization</h1></div><span>Checkpoint #{syncCheckpointVal}</span></div><div className="storage-card"><strong>{cloudBytes===null?'—':(cloudBytes/1024).toFixed(1)+' KB'}</strong><span>Cloud R2 catalogue images</span><p>Calculated from the authenticated organization’s confirmed grid/detail image metadata. This is the cloud catalogue total, not a browser cache estimate.</p><strong>{(bytes/1024).toFixed(1)} KB</strong><span>This device’s OPFS image replica</span><p>Images saved while working offline are counted here separately and remain on this device until explicitly cleared.</p><div style={{display:'flex',gap:'10px',alignItems:'center',padding:'8px 0'}}><span>Offline queue:</span><strong>{pendingCount} operation(s) pending sync</strong>{pendingCount>0&&<button className="quiet" style={{minHeight:'28px',padding:'0 8px',fontSize:'12px'}} onClick={async()=>{await storage.clearPendingOperations();await load();setNotice('Pending operations queue cleared.')}}>Clear queue</button>}</div><button className="primary" disabled={syncing||!online} onClick={()=>void triggerSync()}>{syncing?'Synchronizing…':'Run Full Synchronization'}</button><button className="quiet" disabled={recovering||!online} onClick={()=>void triggerImageRecovery()}>{recovering?'Recovering images…':'Scan & Recover Missing Images'}</button><button className="quiet" disabled={uploading||!online} onClick={()=>void uploadImages()}>{uploading?'Uploading pending images…':'Upload pending product images'}</button><button className="quiet" onClick={()=>{void load();void loadCloudStorage()}}>Refresh storage estimate</button></div></main>}

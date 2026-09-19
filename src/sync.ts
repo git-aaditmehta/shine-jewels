@@ -81,6 +81,57 @@ async function directUpload(token: string, productId: string, representation: 'g
   return { key: grant.key, sizeBytes: grant.sizeBytes, checksum: grant.checksum }
 }
 
+export async function uploadProductOnline(token: string, productId: string): Promise<Product & { id: string }> {
+  const initialItem = (await storage.products()).find(x => x.id === productId)
+  if (!initialItem) throw new Error('Product not found locally.')
+  const categories = await storage.categories(), subcategories = await storage.subcategories()
+  const localCategory = categories.find(x => x.id === initialItem.categoryId)
+  const localSubcategory = subcategories.find(x => x.id === initialItem.subcategoryId)
+  if (!localCategory || !localSubcategory) throw new Error('Product category or subcategory is missing locally.')
+
+  const bootstrap = await workerApi<Bootstrap>('/sync/bootstrap', { token })
+  let remoteCategory = bootstrap.categories.find(x => !x.deleted_at && same(String(x.name), localCategory.name))
+  if (!remoteCategory) remoteCategory = await workerApi<Record<string, unknown>>('/categories', { method: 'POST', token, body: { id: localCategory.id, name: localCategory.name } })
+  await storage.remapCategoryId(localCategory.id, String(remoteCategory.id))
+
+  const remappedItem = (await storage.products()).find(x => x.id === productId)
+  if (!remappedItem) throw new Error('Product lost during category remap.')
+  const targetCategoryId = remappedItem.categoryId
+  let remoteSubcategory = bootstrap.subcategories.find(x => !x.deleted_at && String(x.category_id) === targetCategoryId && same(String(x.name), localSubcategory.name))
+  if (!remoteSubcategory) remoteSubcategory = await workerApi<Record<string, unknown>>('/subcategories', { method: 'POST', token, body: { id: localSubcategory.id, name: localSubcategory.name, categoryId: targetCategoryId } })
+  await storage.remapSubcategoryId(localSubcategory.id, String(remoteSubcategory.id))
+
+  const finalItem = (await storage.products()).find(x => x.id === productId)
+  if (!finalItem) throw new Error('Product lost during subcategory remap.')
+
+  const [gridImage, detailImage] = await Promise.all([
+    directUpload(token, finalItem.id, 'grid', finalItem.gridImage, finalItem.imageVersion),
+    directUpload(token, finalItem.id, 'detail', finalItem.detailImage, finalItem.imageVersion)
+  ])
+  const res = await workerApi<Product & { id: string }>('/products', {
+    method: 'POST',
+    token,
+    body: { id: finalItem.id, designCode: finalItem.designCode, categoryId: finalItem.categoryId, subcategoryId: finalItem.subcategoryId, weightMg: finalItem.weightMg, gridImage, detailImage }
+  })
+  const savedProd: Product = {
+    ...finalItem,
+    id: res.id || finalItem.id,
+    syncState: 'SYNCED',
+    gridImageKey: gridImage.key,
+    detailImageKey: detailImage.key,
+    gridImageChecksum: gridImage.checksum,
+    detailImageChecksum: detailImage.checksum,
+    gridImageSizeBytes: gridImage.sizeBytes,
+    detailImageSizeBytes: detailImage.sizeBytes
+  }
+  if (res.id && res.id !== finalItem.id) {
+    await storage.remapProductId(finalItem.id, res.id, savedProd)
+  } else {
+    await storage.saveProduct(savedProd, false)
+  }
+  return res
+}
+
 async function push(token: string, operation: Awaited<ReturnType<typeof storage.pendingOperations>>[number]) {
   const payload = JSON.parse(operation.payload) as Record<string, unknown>
   if (operation.entity_type === 'category') return workerApi('/categories', { method: 'POST', token, body: payload })
@@ -93,52 +144,7 @@ async function push(token: string, operation: Awaited<ReturnType<typeof storage.
   if (operation.entity_type === 'product') {
     const initialItem = (await storage.products()).find(x => x.id === payload.id)
     if (!initialItem) return null
-    const categories = await storage.categories(), subcategories = await storage.subcategories()
-    const localCategory = categories.find(x => x.id === initialItem.categoryId)
-    const localSubcategory = subcategories.find(x => x.id === initialItem.subcategoryId)
-    if (!localCategory || !localSubcategory) throw new Error('Product category or subcategory is missing locally.')
-
-    const bootstrap = await workerApi<Bootstrap>('/sync/bootstrap', { token })
-    let remoteCategory = bootstrap.categories.find(x => !x.deleted_at && same(String(x.name), localCategory.name))
-    if (!remoteCategory) remoteCategory = await workerApi<Record<string, unknown>>('/categories', { method: 'POST', token, body: { id: localCategory.id, name: localCategory.name } })
-    await storage.remapCategoryId(localCategory.id, String(remoteCategory.id))
-
-    const remappedItem = (await storage.products()).find(x => x.id === payload.id)
-    if (!remappedItem) throw new Error('Product lost during category remap.')
-    const targetCategoryId = remappedItem.categoryId
-    let remoteSubcategory = bootstrap.subcategories.find(x => !x.deleted_at && String(x.category_id) === targetCategoryId && same(String(x.name), localSubcategory.name))
-    if (!remoteSubcategory) remoteSubcategory = await workerApi<Record<string, unknown>>('/subcategories', { method: 'POST', token, body: { id: localSubcategory.id, name: localSubcategory.name, categoryId: targetCategoryId } })
-    await storage.remapSubcategoryId(localSubcategory.id, String(remoteSubcategory.id))
-
-    const finalItem = (await storage.products()).find(x => x.id === payload.id)
-    if (!finalItem) throw new Error('Product lost during subcategory remap.')
-
-    const [gridImage, detailImage] = await Promise.all([
-      directUpload(token, finalItem.id, 'grid', finalItem.gridImage, finalItem.imageVersion),
-      directUpload(token, finalItem.id, 'detail', finalItem.detailImage, finalItem.imageVersion)
-    ])
-    const res = await workerApi<Product & { id: string }>('/products', {
-      method: 'POST',
-      token,
-      body: { id: finalItem.id, designCode: finalItem.designCode, categoryId: finalItem.categoryId, subcategoryId: finalItem.subcategoryId, weightMg: finalItem.weightMg, gridImage, detailImage }
-    })
-    const savedProd: Product = {
-      ...finalItem,
-      id: res.id || finalItem.id,
-      syncState: 'SYNCED',
-      gridImageKey: gridImage.key,
-      detailImageKey: detailImage.key,
-      gridImageChecksum: gridImage.checksum,
-      detailImageChecksum: detailImage.checksum,
-      gridImageSizeBytes: gridImage.sizeBytes,
-      detailImageSizeBytes: detailImage.sizeBytes
-    }
-    if (res.id && res.id !== finalItem.id) {
-      await storage.remapProductId(finalItem.id, res.id, savedProd)
-    } else {
-      await storage.saveProduct(savedProd, false)
-    }
-    return res
+    return uploadProductOnline(token, String(payload.id))
   }
   throw new Error(`Unsupported queued operation: ${operation.entity_type}.`)
 }
