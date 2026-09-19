@@ -61,4 +61,26 @@ describe('business invariant helpers',()=>{
   expect(prod.gridImage).not.toContain('[object Object]')
   expect(prod.gridImage).toContain('shine-jewels-demo/products/p202/v1/grid')
  })
+ it('enforces vendor uniqueness on normalized name and city', ()=>{
+  const rawVendors = [
+   { id: 'v1', name: 'Shree Radhey Jewellers', city: 'Mumbai', address: 'Zaveri Bazaar', type: 'WHOLESALE' },
+   { id: 'v2', name: 'shree radhey jewellers ', city: ' mumbai', address: 'Old Zaveri Bazaar', type: 'WHOLESALE' },
+   { id: 'v3', name: 'Shree Radhey Jewellers', city: 'Surat', address: 'Ring Road', type: 'RETAIL' },
+   { id: 'v4', name: 'Kalyan Jewellers', city: 'Mumbai', address: 'Bandra', type: 'RETAIL' }
+  ]
+  const byNameCity = new Map<string, typeof rawVendors[0]>()
+  for (const v of rawVendors) {
+   const key = `${v.name.trim().toLowerCase()}|${v.city.trim().toLowerCase()}`
+   if (!byNameCity.has(key)) {
+    byNameCity.set(key, v)
+   }
+  }
+  const deduped = Array.from(byNameCity.values())
+  expect(deduped).toHaveLength(3)
+  expect(deduped.map(v => `${v.name.trim().toLowerCase()}|${v.city.trim().toLowerCase()}`)).toEqual([
+   'shree radhey jewellers|mumbai',
+   'shree radhey jewellers|surat',
+   'kalyan jewellers|mumbai'
+  ])
+ })
 })

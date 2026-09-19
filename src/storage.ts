@@ -1,11 +1,11 @@
 import { LocalSqlite } from './local-sqlite'
 import type { Category, Order, Product, Session, Subcategory, Vendor } from './types'
 export type PendingOperation={id:string;idempotency_key:string;entity_type:string;operation:string;payload:string;retry_count:number}
-export interface CatalogueStorage { products():Promise<Product[]>;hasLocalReplica():Promise<boolean>;saveProduct(x:Product,queue?:boolean):Promise<void>;hasImage(path:string):Promise<boolean>;deleteImage(path:string):Promise<void>;categories():Promise<Category[]>;saveCategory(x:Category):Promise<void>;subcategories():Promise<Subcategory[]>;saveSubcategory(x:Subcategory):Promise<void>;vendors():Promise<Vendor[]>;saveVendor(x:Vendor):Promise<void>;orders():Promise<Order[]>;saveOrder(x:Order):Promise<void>;session():Promise<Session|null>;saveSession(x:Session):Promise<void>;clearSession():Promise<void>;storageBytes():Promise<number>;syncCheckpoint():Promise<number>;setSyncCheckpoint(x:number):Promise<void>;pendingOperations():Promise<PendingOperation[]>;completeOperation(id:string,error?:string):Promise<void>;clearPendingOperations():Promise<void>;remapCategoryId(from:string,to:string):Promise<void>;remapSubcategoryId(from:string,to:string):Promise<void>;remapProductId(fromId:string,toId:string,updated:Product):Promise<void>;applyRemoteChange(x:{entityType:string;entityId:string;operation:string;payload:unknown}):Promise<void>;cacheRemoteImage(productId:string,representation:'grid'|'detail',url:string,version:number,expectedChecksum?:string,expectedSize?:number):Promise<void> }
+export interface CatalogueStorage { products():Promise<Product[]>;hasLocalReplica():Promise<boolean>;saveProduct(x:Product,queue?:boolean):Promise<void>;hasImage(path:string):Promise<boolean>;deleteImage(path:string):Promise<void>;categories():Promise<Category[]>;saveCategory(x:Category):Promise<void>;subcategories():Promise<Subcategory[]>;saveSubcategory(x:Subcategory):Promise<void>;vendors():Promise<Vendor[]>;saveVendor(x:Vendor):Promise<void>;orders():Promise<Order[]>;saveOrder(x:Order):Promise<void>;session():Promise<Session|null>;saveSession(x:Session):Promise<void>;clearSession():Promise<void>;storageBytes():Promise<number>;syncCheckpoint():Promise<number>;setSyncCheckpoint(x:number):Promise<void>;pendingOperations():Promise<PendingOperation[]>;completeOperation(id:string,error?:string):Promise<void>;clearPendingOperations():Promise<void>;remapCategoryId(from:string,to:string):Promise<void>;remapSubcategoryId(from:string,to:string):Promise<void>;remapProductId(fromId:string,toId:string,updated:Product):Promise<void>;remapVendorId(fromId:string,toId:string,updated:Vendor):Promise<void>;applyRemoteChange(x:{entityType:string;entityId:string;operation:string;payload:unknown}):Promise<void>;cacheRemoteImage(productId:string,representation:'grid'|'detail',url:string,version:number,expectedChecksum?:string,expectedSize?:number):Promise<void> }
 class SqliteOpfsStorage implements CatalogueStorage {
  private db=new LocalSqlite();private ready=this.bootstrap()
  private imageMemoryCache=new Map<string,string>()
- private async bootstrap(){if(!this.db.isAvailable())return;try{await this.db.execute('CREATE TABLE IF NOT EXISTS local_entities(entity_type TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(entity_type,id))');if(await this.db.checkpoint('storage_schema_version')!=='5'){await this.db.execute("DELETE FROM local_entities WHERE (entity_type='product' AND id IN ('p1','p2')) OR (entity_type='category' AND id='rings') OR (entity_type='subcategory' AND id='solitaire') OR (entity_type='vendor' AND id='v1')");await this.db.setCheckpoint('storage_schema_version','5')};await this.db.execute("DELETE FROM pending_operations WHERE state='ERROR'");const pending=await this.db.execute("SELECT id,entity_type,payload FROM pending_operations");for(const op of (pending.rows||[]) as {id:string;entity_type:string;payload:string}[]){if(op.entity_type==='product'){try{const parsed=JSON.parse(op.payload) as {id?:string};if(parsed?.id){const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=? AND deleted=0",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}}catch{await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}}}catch{/* ignore in test runner */}}
+ private async bootstrap(){if(!this.db.isAvailable())return;try{await this.db.execute('CREATE TABLE IF NOT EXISTS local_entities(entity_type TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(entity_type,id))');if(await this.db.checkpoint('storage_schema_version')!=='5'){await this.db.execute("DELETE FROM local_entities WHERE (entity_type='product' AND id IN ('p1','p2')) OR (entity_type='category' AND id='rings') OR (entity_type='subcategory' AND id='solitaire') OR (entity_type='vendor' AND id='v1')");await this.db.setCheckpoint('storage_schema_version','5')};await this.db.execute("DELETE FROM pending_operations WHERE state='ERROR'");const pending=await this.db.execute("SELECT id,entity_type,payload FROM pending_operations");for(const op of (pending.rows||[]) as {id:string;entity_type:string;payload:string}[]){if(op.entity_type==='product'){try{const parsed=JSON.parse(op.payload) as {id?:string};if(parsed?.id){const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=? AND deleted=0",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}}catch{await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}};const vRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='vendor' AND deleted=0");const seenV=new Set<string>();for(const r of (vRows.rows||[]) as {id:string;payload:string}[]){try{const v=JSON.parse(r.payload) as Vendor;const k=`${(v.name||'').trim().toLowerCase()}|${(v.city||'').trim().toLowerCase()}`;if(seenV.has(k)){await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id]);await this.db.execute("DELETE FROM pending_operations WHERE entity_type='vendor' AND id=?",[r.id])}else{seenV.add(k)}}catch{await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id])}}}catch{/* ignore in test runner */}}
  private async save(type:string,id:string,value:unknown){
   if(type==='product'){
    const prod=value as Product
@@ -20,6 +20,25 @@ class SqliteOpfsStorage implements CatalogueStorage {
         await this.db.execute("DELETE FROM local_entities WHERE entity_type='product' AND id=?",[row.id])
        }
       }catch{/* ignore parse error */}
+     }
+    }
+   }
+  }
+  if(type==='vendor'){
+   const v=value as Vendor
+   if(v.name&&v.city){
+    const normKey=`${v.name.trim().toLowerCase()}|${v.city.trim().toLowerCase()}`
+    const existingRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='vendor' AND deleted=0")
+    for(const r of existingRows.rows||[]){
+     const row=r as {id:string;payload:string}
+     if(row.id!==id){
+      try{
+       const ev=JSON.parse(row.payload) as Vendor
+       if(ev.name&&ev.city&&`${ev.name.trim().toLowerCase()}|${ev.city.trim().toLowerCase()}`===normKey){
+        await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[row.id])
+        await this.db.execute("DELETE FROM pending_operations WHERE entity_type='vendor' AND id=?",[row.id])
+       }
+      }catch{/* ignore */}
      }
     }
    }
@@ -78,7 +97,20 @@ class SqliteOpfsStorage implements CatalogueStorage {
  async hasLocalReplica(){await this.ready;const result=await this.db.execute("SELECT COUNT(*) count FROM local_entities WHERE entity_type='product' AND deleted=0");return Number((result.rows?.[0] as {count:number}|undefined)?.count||0)>0}
  async hasImage(path:string){if(this.imageMemoryCache.has(path))return true;await this.ready;return this.db.hasImage(path)}
  async deleteImage(path:string){this.imageMemoryCache.delete(path);await this.ready;return this.db.deleteImage(path)}
- async categories(){return(await this.values<Category>('category')).filter(x=>x.active)} async subcategories(){return(await this.values<Subcategory>('subcategory')).filter(x=>x.active)} async vendors(){return(await this.values<Vendor>('vendor')).filter(x=>!x.deleted)} async orders(){return this.values<Order>('order')} async session(){return(await this.values<Session>('offline-authorization'))[0]||null}
+ async categories(){return(await this.values<Category>('category')).filter(x=>x.active)} async subcategories(){return(await this.values<Subcategory>('subcategory')).filter(x=>x.active)}
+ async vendors(){
+  const items=(await this.values<Vendor>('vendor')).filter(x=>!x.deleted);
+  const byNameCity=new Map<string,Vendor>();
+  for(const v of items){
+   if(!v.name||!v.city)continue;
+   const key=`${v.name.trim().toLowerCase()}|${v.city.trim().toLowerCase()}`;
+   if(!byNameCity.has(key)){
+    byNameCity.set(key,v);
+   }
+  }
+  return Array.from(byNameCity.values());
+ }
+ async orders(){return this.values<Order>('order')} async session(){return(await this.values<Session>('offline-authorization'))[0]||null}
  async saveCategory(x:Category){await this.ready;await this.save('category',x.id,x);await this.db.queueOperation('category','UPSERT',x)} async saveSubcategory(x:Subcategory){await this.ready;await this.save('subcategory',x.id,x);await this.db.queueOperation('subcategory','UPSERT',x)} async saveVendor(x:Vendor){await this.ready;await this.save('vendor',x.id,x);await this.db.queueOperation('vendor','UPSERT',x)} async saveProduct(x:Product,queue=x.syncState!=='SYNCED'){await this.ready;await this.persistProduct(x,queue)} async saveOrder(x:Order){await this.ready;await this.save('order',x.id,x);await this.db.queueOperation('presentation','FINALIZE',x)}
  async saveSession(x:Session){await this.ready;await this.save('offline-authorization',x.userId,x);await this.db.setCheckpoint('offline_authorization_expires_at',x.offlineAuthorizationExpiresAt)} async clearSession(){await this.ready;await this.db.execute("UPDATE local_entities SET deleted=1,updated_at=CURRENT_TIMESTAMP WHERE entity_type='offline-authorization'")} async storageBytes(){await this.ready;const x=await this.db.execute('SELECT COALESCE(SUM(bytes),0) bytes FROM storage_accounting');return Number((x.rows?.[0] as {bytes:number}|undefined)?.bytes||0)}
  async syncCheckpoint(){await this.ready;return Number(await this.db.checkpoint('sync_checkpoint')||0)} async setSyncCheckpoint(x:number){await this.ready;await this.db.setCheckpoint('sync_checkpoint',String(x))}
@@ -121,6 +153,23 @@ class SqliteOpfsStorage implements CatalogueStorage {
    if(this.imageMemoryCache.has(oldDetail))this.imageMemoryCache.set(newDetail,this.imageMemoryCache.get(oldDetail)!)
   }
   await this.persistProduct(updated,false)
+ }
+ async remapVendorId(fromId:string,toId:string,updated:Vendor){
+  if(fromId===toId)return;
+  await this.ready;
+  await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[fromId]);
+  await this.db.execute("DELETE FROM pending_operations WHERE entity_type='vendor' AND id=?",[fromId]);
+  await this.save('vendor',toId,updated);
+  const orderRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='order' AND deleted=0");
+  for(const r of (orderRows.rows||[]) as {id:string;payload:string}[]){
+   try{
+    const ord=JSON.parse(r.payload) as Order;
+    if(ord.vendor?.id===fromId){
+     ord.vendor={...ord.vendor,...updated,id:toId};
+     await this.save('order',ord.id,ord);
+    }
+   }catch{/* ignore */}
+  }
  }
  async applyRemoteChange(x:{entityType:string;entityId:string;operation:string;payload:unknown}){await this.ready;if(x.operation==='ARCHIVE'||x.operation==='DELETE'){await this.db.execute('UPDATE local_entities SET deleted=1,updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?',[x.entityType,x.entityId]);return}const type=x.entityType==='presentation'?'order':x.entityType;const payload=x.payload as Record<string,unknown>;await this.save(type,x.entityId,{...payload,id:x.entityId})}
  async cacheRemoteImage(productId:string,representation:'grid'|'detail',url:string,version:number,expectedChecksum?:string,expectedSize?:number){

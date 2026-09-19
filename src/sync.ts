@@ -1,7 +1,7 @@
 
 import { workerApi } from './api'
 import { storage } from './storage'
-import type { Product } from './types'
+import type { Category, Product, Subcategory, Vendor } from './types'
 
 type Change = { sequence_number: number; entity_type: string; entity_id: string; operation: string; payload: string }
 type Bootstrap = { categories: Record<string, unknown>[]; subcategories: Record<string, unknown>[]; vendors: Record<string, unknown>[]; products: Record<string, unknown>[]; presentations: Record<string, unknown>[]; checkpoint: number }
@@ -163,9 +163,30 @@ export async function uploadProductOnline(token: string, productId: string): Pro
 
 export async function push(token: string, operation: Awaited<ReturnType<typeof storage.pendingOperations>>[number]) {
   const payload = JSON.parse(operation.payload) as Record<string, unknown>
-  if (operation.entity_type === 'category') return workerApi('/categories', { method: 'POST', token, body: payload })
-  if (operation.entity_type === 'subcategory') return workerApi('/subcategories', { method: 'POST', token, body: payload })
-  if (operation.entity_type === 'vendor') return workerApi('/vendors', { method: 'POST', token, body: payload })
+  if (operation.entity_type === 'category') {
+    const localCat = payload as unknown as Category
+    const res = await workerApi<Category>('/categories', { method: 'POST', token, body: payload })
+    if (res && res.id && res.id !== localCat.id) {
+      await storage.remapCategoryId(localCat.id, res.id)
+    }
+    return res
+  }
+  if (operation.entity_type === 'subcategory') {
+    const localSub = payload as unknown as Subcategory
+    const res = await workerApi<Subcategory>('/subcategories', { method: 'POST', token, body: payload })
+    if (res && res.id && res.id !== localSub.id) {
+      await storage.remapSubcategoryId(localSub.id, res.id)
+    }
+    return res
+  }
+  if (operation.entity_type === 'vendor') {
+    const localVendor = payload as unknown as Vendor
+    const res = await workerApi<Vendor>('/vendors', { method: 'POST', token, body: payload })
+    if (res && res.id && res.id !== localVendor.id) {
+      await storage.remapVendorId(localVendor.id, res.id, res)
+    }
+    return res
+  }
   if (operation.entity_type === 'presentation') {
     const order = payload as unknown as { id: string; vendor: { id: string }; items: { productId: string; quantity: number; remark: string }[] }
     return workerApi('/orders', { method: 'POST', token, body: { id: order.id, vendorId: order.vendor.id, items: order.items.map(item => ({ productId: item.productId, quantity: item.quantity, remark: item.remark })) } })
