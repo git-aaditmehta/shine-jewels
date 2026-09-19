@@ -1,7 +1,7 @@
 import { LocalSqlite } from './local-sqlite'
 import type { Category, Order, Product, Session, Subcategory, Vendor } from './types'
 export type PendingOperation={id:string;idempotency_key:string;entity_type:string;operation:string;payload:string;retry_count:number}
-export interface CatalogueStorage { products():Promise<Product[]>;hasLocalReplica():Promise<boolean>;saveProduct(x:Product,queue?:boolean):Promise<void>;hasImage(path:string):Promise<boolean>;deleteImage(path:string):Promise<void>;categories():Promise<Category[]>;saveCategory(x:Category):Promise<void>;subcategories():Promise<Subcategory[]>;saveSubcategory(x:Subcategory):Promise<void>;vendors():Promise<Vendor[]>;saveVendor(x:Vendor):Promise<void>;orders():Promise<Order[]>;saveOrder(x:Order):Promise<void>;session():Promise<Session|null>;saveSession(x:Session):Promise<void>;clearSession():Promise<void>;storageBytes():Promise<number>;syncCheckpoint():Promise<number>;setSyncCheckpoint(x:number):Promise<void>;pendingOperations():Promise<PendingOperation[]>;completeOperation(id:string,error?:string):Promise<void>;clearPendingOperations():Promise<void>;remapCategoryId(from:string,to:string):Promise<void>;remapSubcategoryId(from:string,to:string):Promise<void>;remapProductId(fromId:string,toId:string,updated:Product):Promise<void>;remapVendorId(fromId:string,toId:string,updated:Vendor):Promise<void>;applyRemoteChange(x:{entityType:string;entityId:string;operation:string;payload:unknown}):Promise<void>;cacheRemoteImage(productId:string,representation:'grid'|'detail',url:string,version:number,expectedChecksum?:string,expectedSize?:number):Promise<void> }
+export interface CatalogueStorage { products():Promise<Product[]>;hasLocalReplica():Promise<boolean>;saveProduct(x:Product,queue?:boolean):Promise<void>;getImage(path:string):Promise<string|null>;saveImageData(path:string,dataUrl:string):Promise<void>;hasImage(path:string):Promise<boolean>;deleteImage(path:string):Promise<void>;categories():Promise<Category[]>;saveCategory(x:Category):Promise<void>;subcategories():Promise<Subcategory[]>;saveSubcategory(x:Subcategory):Promise<void>;vendors():Promise<Vendor[]>;saveVendor(x:Vendor):Promise<void>;orders():Promise<Order[]>;saveOrder(x:Order):Promise<void>;session():Promise<Session|null>;saveSession(x:Session):Promise<void>;clearSession():Promise<void>;storageBytes():Promise<number>;syncCheckpoint():Promise<number>;setSyncCheckpoint(x:number):Promise<void>;pendingOperations():Promise<PendingOperation[]>;completeOperation(id:string,error?:string):Promise<void>;clearPendingOperations():Promise<void>;remapCategoryId(from:string,to:string):Promise<void>;remapSubcategoryId(from:string,to:string):Promise<void>;remapProductId(fromId:string,toId:string,updated:Product):Promise<void>;remapVendorId(fromId:string,toId:string,updated:Vendor):Promise<void>;applyRemoteChange(x:{entityType:string;entityId:string;operation:string;payload:unknown}):Promise<void>;cacheRemoteImage(productId:string,representation:'grid'|'detail',url:string,version:number,expectedChecksum?:string,expectedSize?:number):Promise<void> }
 class SqliteOpfsStorage implements CatalogueStorage {
  private db=new LocalSqlite();private ready=this.bootstrap()
  private imageMemoryCache=new Map<string,string>()
@@ -95,6 +95,8 @@ class SqliteOpfsStorage implements CatalogueStorage {
   }))
  }
  async hasLocalReplica(){await this.ready;const result=await this.db.execute("SELECT COUNT(*) count FROM local_entities WHERE entity_type='product' AND deleted=0");return Number((result.rows?.[0] as {count:number}|undefined)?.count||0)>0}
+ async getImage(path:string):Promise<string|null>{if(!path)return null;if(path.startsWith('data:'))return path;if(this.imageMemoryCache.has(path))return this.imageMemoryCache.get(path)!;await this.ready;try{const data=await this.db.getImage(path);if(data&&data.startsWith('data:')){this.imageMemoryCache.set(path,data);return data}}catch{/* not in local storage */}return null}
+ async saveImageData(path:string,dataUrl:string):Promise<void>{if(!path||!dataUrl)return;this.imageMemoryCache.set(path,dataUrl);await this.ready;try{await this.db.putImage(path,dataUrl)}catch{/* ignore */}}
  async hasImage(path:string){if(this.imageMemoryCache.has(path))return true;await this.ready;return this.db.hasImage(path)}
  async deleteImage(path:string){this.imageMemoryCache.delete(path);await this.ready;return this.db.deleteImage(path)}
  async categories(){return(await this.values<Category>('category')).filter(x=>x.active)} async subcategories(){return(await this.values<Subcategory>('subcategory')).filter(x=>x.active)}
@@ -110,7 +112,37 @@ class SqliteOpfsStorage implements CatalogueStorage {
   }
   return Array.from(byNameCity.values());
  }
- async orders(){return this.values<Order>('order')} async session(){return(await this.values<Session>('offline-authorization'))[0]||null}
+  async orders(): Promise<Order[]> {
+    const raw = await this.values<Record<string, unknown>>('order')
+    return raw.map(o => {
+      const vRaw = (o.vendor as Record<string, unknown> | undefined) || {}
+      const vendorName = String(vRaw.name || o.vendor_name_snapshot || o.vendorName || 'Unknown Vendor')
+      const vendorAddress = String(vRaw.address || o.vendor_address_snapshot || o.vendorAddress || '')
+      const vendorCity = String(vRaw.city || o.vendor_city_snapshot || o.vendorCity || '')
+      const vendorType = String(vRaw.type || o.vendor_type_snapshot || o.vendorType || 'WHOLESALE') as Vendor['type']
+      const vendorId = String(vRaw.id || o.vendor_id || '')
+      const vendor: Vendor = { id: vendorId, name: vendorName, address: vendorAddress, city: vendorCity, type: vendorType }
+
+      const orderNumber = Number(o.orderNumber || o.order_number || 0)
+      const itemsList = Array.isArray(o.items) ? (o.items as Order['items']) : []
+      const salesperson = String(o.salesperson || o.salesperson_id || 'Salesperson')
+      const generatedAt = String(o.generatedAt || o.generated_at || o.createdAt || new Date().toISOString())
+      const createdAt = String(o.createdAt || o.generatedAt || o.generated_at || new Date().toISOString())
+
+      return {
+        ...o,
+        id: String(o.id),
+        orderNumber,
+        vendor,
+        items: itemsList,
+        salesperson,
+        status: (o.status as Order['status']) || 'FINALIZED',
+        createdAt,
+        generatedAt
+      } as Order
+    })
+  }
+ async session(){return(await this.values<Session>('offline-authorization'))[0]||null}
  async saveCategory(x:Category){await this.ready;await this.save('category',x.id,x);await this.db.queueOperation('category','UPSERT',x)} async saveSubcategory(x:Subcategory){await this.ready;await this.save('subcategory',x.id,x);await this.db.queueOperation('subcategory','UPSERT',x)} async saveVendor(x:Vendor){await this.ready;await this.save('vendor',x.id,x);await this.db.queueOperation('vendor','UPSERT',x)} async saveProduct(x:Product,queue=x.syncState!=='SYNCED'){await this.ready;await this.persistProduct(x,queue)} async saveOrder(x:Order){await this.ready;await this.save('order',x.id,x);await this.db.queueOperation('presentation','FINALIZE',x)}
  async saveSession(x:Session){await this.ready;await this.save('offline-authorization',x.userId,x);await this.db.setCheckpoint('offline_authorization_expires_at',x.offlineAuthorizationExpiresAt)} async clearSession(){await this.ready;await this.db.execute("UPDATE local_entities SET deleted=1,updated_at=CURRENT_TIMESTAMP WHERE entity_type='offline-authorization'")} async storageBytes(){await this.ready;const x=await this.db.execute('SELECT COALESCE(SUM(bytes),0) bytes FROM storage_accounting');return Number((x.rows?.[0] as {bytes:number}|undefined)?.bytes||0)}
  async syncCheckpoint(){await this.ready;return Number(await this.db.checkpoint('sync_checkpoint')||0)} async setSyncCheckpoint(x:number){await this.ready;await this.db.setCheckpoint('sync_checkpoint',String(x))}

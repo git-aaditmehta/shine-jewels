@@ -1,7 +1,34 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+
+export class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: string }> {
+  constructor(props: { children: ReactNode }) {
+    super(props)
+    this.state = { hasError: false, error: '' }
+  }
+  static getDerivedStateFromError(error: unknown) {
+    return { hasError: true, error: error instanceof Error ? error.message : String(error) }
+  }
+  componentDidCatch(error: unknown, info: unknown) {
+    console.error('ErrorBoundary caught an error:', error, info)
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '40px 20px', maxWidth: '600px', margin: '60px auto', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '14px', textAlign: 'center' }}>
+          <h2 style={{ fontFamily: 'var(--font-display)', color: 'var(--danger)', margin: '0 0 10px' }}>Notice</h2>
+          <p style={{ color: 'var(--muted)', fontSize: '14px', lineHeight: '1.5', margin: '0 0 20px' }}>{this.state.error || 'A display issue occurred.'}</p>
+          <button className="primary" style={{ maxWidth: '220px', margin: '0 auto' }} onClick={() => { this.setState({ hasError: false, error: '' }); window.location.reload() }}>
+            Reload Application
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 import { login, workerApi } from './api'
 import { cloudImageStorageBytes, initialDownload, push, recoverMissingImages, synchronize, uploadPendingProductImages } from './sync'
-import { generateOrderPdf } from './pdf'
+import { createOrderPdfBlob, downloadPdfBlob, sharePdfFile, type GeneratedPdfResult } from './pdf'
 import { storage } from './storage'
 import type { Category, Order, Product, Session, Subcategory, Vendor } from './types'
 import { BatchEntry, ProductEntry, Taxonomy } from './Management'
@@ -43,7 +70,7 @@ function Login({onSession}:{onSession:(session:Session)=>void}){
 export function App(){
  const [session,setSession]=useState<Session|null>(()=>{try{const value=sessionStorage.getItem(sessionKey);return value?JSON.parse(value) as Session:null}catch{return null}})
  const [products,setProducts]=useState<Product[]>([]),[categories,setCategories]=useState<Category[]>([]),[subcategories,setSubcategories]=useState<Subcategory[]>([]),[vendors,setVendors]=useState<Vendor[]>([]),[orders,setOrders]=useState<Order[]>([])
- const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number;remark:string}>>({}),[vendorId,setVendorId]=useState(''),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[bytes,setBytes]=useState(0),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<{id:string;device_id:string;device_name:string;last_seen_at:string;offline_authorization_expires_at:string;revoked_at:string|null}[]>([])
+ const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number;remark:string}>>({}),[vendorId,setVendorId]=useState(''),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[pdfPreview,setPdfPreview]=useState<GeneratedPdfResult|null>(null),[generatingPdf,setGeneratingPdf]=useState(false),[bytes,setBytes]=useState(0),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<{id:string;device_id:string;device_name:string;last_seen_at:string;offline_authorization_expires_at:string;revoked_at:string|null}[]>([])
  const maxPossibleWeight = useMemo(()=>{const active=products.filter(p=>!p.deleted).map(p=>p.weightMg/1000);return active.length?Math.max(50,Math.ceil(Math.max(...active))):100},[products])
  const currentMinVal = minWeight !== '' ? Math.max(0, Math.round(Number(minWeight))) : 0
  const currentMaxVal = maxWeight !== '' ? Math.min(maxPossibleWeight, Math.round(Number(maxWeight))) : maxPossibleWeight
@@ -113,7 +140,8 @@ export function App(){
  useEffect(()=>{const onOnline=()=>{setOnline(true);void triggerSync()};const onOffline=()=>{setOnline(false)};window.addEventListener('online',onOnline);window.addEventListener('offline',onOffline);return ()=>{window.removeEventListener('online',onOnline);window.removeEventListener('offline',onOffline)}},[session])
  const toggle=(id:string)=>setSelected(x=>x[id]?Object.fromEntries(Object.entries(x).filter(([k])=>k!==id)):{...x,[id]:{quantity:1,remark:''}})
  const change=(id:string,key:'quantity'|'remark',value:string)=>setSelected(s=>({...s,[id]:{...s[id], [key]:key==='quantity'?Math.max(1,Number(value)||1):value}}))
- const makeOrder=async()=>{const vendor=vendors.find(v=>v.id===vendorId);const picks=products.filter(p=>selected[p.id]); if(!vendor){setNotice('Select a vendor before reviewing the order.');return} if(!picks.length){setNotice('Select at least one design.');return};const max=Math.max(0,...orders.map(o=>o.orderNumber||0));const order:Order={id:uid(),orderNumber:max+1,vendor,salesperson:session?.displayName||'Salesperson',status:'FINALIZED',createdAt:new Date().toISOString(),generatedAt:new Date().toISOString(),items:picks.map((p,index)=>({productId:p.id,serialNumber:index+1,designCode:p.designCode,category:categories.find(c=>c.id===p.categoryId)?.name||'',subcategory:subcategories.find(s=>s.id===p.subcategoryId)?.name||'',weightMg:p.weightMg,quantity:selected[p.id].quantity,remark:selected[p.id].remark,image:p.gridImage}))};await storage.saveOrder(order);setOrders(o=>[order,...o]);await generateOrderPdf(order);setSelected({});await load();setNotice(`Order #${order.orderNumber} finalized locally. PDF download started.`)}
+ const makeOrder=async()=>{const vendor=vendors.find(v=>v.id===vendorId);const picks=products.filter(p=>selected[p.id]);if(!vendor){setNotice('Select a vendor before reviewing the order.');return}if(!picks.length){setNotice('Select at least one design.');return};const max=Math.max(0,...orders.map(o=>o.orderNumber||0));const order:Order={id:uid(),orderNumber:max+1,vendor,salesperson:session?.displayName||'Salesperson',status:'FINALIZED',createdAt:new Date().toISOString(),generatedAt:new Date().toISOString(),items:picks.map((p,index)=>({productId:p.id,serialNumber:index+1,designCode:p.designCode,category:categories.find(c=>c.id===p.categoryId)?.name||'',subcategory:subcategories.find(s=>s.id===p.subcategoryId)?.name||'',weightMg:p.weightMg,quantity:selected[p.id].quantity,remark:selected[p.id].remark,image:p.gridImage}))};await storage.saveOrder(order);setOrders(o=>[order,...o]);setSelected({});await load();setNotice(`Order #${order.orderNumber} finalized. Generating PDF preview…`);setGeneratingPdf(true);try{const res=await createOrderPdfBlob(order);setPdfPreview(res);setNotice(`Order #${order.orderNumber} PDF preview is ready.`)}catch(err){setNotice(err instanceof Error?`PDF generation failed: ${err.message}`:'PDF generation failed.')}finally{setGeneratingPdf(false)}}
+  const openOrderPdfPreview=async(order:Order)=>{setGeneratingPdf(true);setNotice(`Generating PDF for Order #${order.orderNumber}…`);try{const res=await createOrderPdfBlob(order);setPdfPreview(res);setNotice(`Order #${order.orderNumber} PDF preview is ready.`)}catch(err){setNotice(err instanceof Error?`PDF generation failed: ${err.message}`:'PDF generation failed.')}finally{setGeneratingPdf(false)}}
  const addVendor=async(e:React.FormEvent<HTMLFormElement>)=>{e.preventDefault();const form=e.currentTarget;const fd=new FormData(form),name=String(fd.get('name')||'').trim(),city=String(fd.get('city')||'').trim(),address=String(fd.get('address')||'').trim(),type=String(fd.get('type')||'WHOLESALE') as Vendor['type'];if(!name||!city||!address){setNotice('Vendor name, business address and city are required.');return};if(vendors.some(v=>v.name.trim().toLowerCase()===name.toLowerCase()&&v.city.trim().toLowerCase()===city.toLowerCase())){setNotice('A vendor with this name and city already exists.');return};form.reset();const v={id:uid(),name,address,city,type};await storage.saveVendor(v);await load();setNotice('Vendor saved locally.')}
  const uploadingRef = useRef(false)
  const triggerBackgroundUpload = () => {
@@ -198,12 +226,67 @@ export function App(){
   {notice&&<div className="notice" role="status">{notice}<button onClick={()=>setNotice('')} aria-label="Dismiss message">×</button></div>}
   <main className="catalogue-layout" style={{display:view==='catalogue'?undefined:'none'}}><section className="catalogue"><div className="section-title"><div><p className="eyebrow">design library</p><h1>Find the right piece, without waiting.</h1></div><span>{filtered.length} designs</span></div><div className="filters"><label>Search design code<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="e.g. SJ-1001" /></label><label>Category<select value={category} onChange={e=>{setCategory(e.target.value);setSubcategory('')}}><option value="">All categories</option>{categories.map(c=><option value={c.id} key={c.id}>{c.name}</option>)}</select></label><label>Subcategory<select value={subcategory} onChange={e=>setSubcategory(e.target.value)}><option value="">All subcategories</option>{subcategories.filter(s=>!category||s.categoryId===category).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label><button className="quiet" onClick={clearFilters}>Clear filters</button></div>
   <div className="weight-filter-bar"><div className="weight-slider-group"><div className="weight-slider-header"><span>Weight Range Slider</span><span>{currentMinVal} g &mdash; {currentMaxVal} g</span></div><div className="dual-slider-track-box"><div className="dual-slider-rail" /><div className="dual-slider-fill" style={{left:`${leftPercent}%`,width:`${widthPercent}%`}} /><input aria-label="Minimum weight slider" className="dual-slider-thumb" type="range" min={0} max={maxPossibleWeight} step={1} value={currentMinVal} onPointerDown={()=>setSliderActive('min')} onChange={onSliderMinChange} style={{zIndex:sliderActive==='min'?5:(currentMinVal>maxPossibleWeight-5?5:3)}} /><input aria-label="Maximum weight slider" className="dual-slider-thumb" type="range" min={0} max={maxPossibleWeight} step={1} value={currentMaxVal} onPointerDown={()=>setSliderActive('max')} onChange={onSliderMaxChange} style={{zIndex:sliderActive==='max'?5:4}} /></div></div><div className="weight-presets" role="group" aria-label="Quick weight presets"><button type="button" className={`weight-preset-btn ${!minWeight&&!maxWeight?'active':''}`} onClick={()=>applyWeightPreset('','')}>All</button><button type="button" className={`weight-preset-btn ${minWeight===''&&maxWeight==='5'?'active':''}`} onClick={()=>applyWeightPreset('','5')}>&lt; 5g</button><button type="button" className={`weight-preset-btn ${minWeight==='5'&&maxWeight==='15'?'active':''}`} onClick={()=>applyWeightPreset('5','15')}>5&ndash;15g</button><button type="button" className={`weight-preset-btn ${minWeight==='15'&&maxWeight==='30'?'active':''}`} onClick={()=>applyWeightPreset('15','30')}>15&ndash;30g</button><button type="button" className={`weight-preset-btn ${minWeight==='30'&&maxWeight===''?'active':''}`} onClick={()=>applyWeightPreset('30','')}>30g+</button></div><div className="weight-inputs"><label>Min (g)<input type="number" step="0.001" min="0" placeholder="0.000" value={minWeight} onChange={e=>setMinWeight(e.target.value)} /></label><span>to</span><label>Max (g)<input type="number" step="0.001" min="0" placeholder="Max" value={maxWeight} onChange={e=>setMaxWeight(e.target.value)} /></label></div></div>
- <div className="grid">{filtered.map(product=><article className={'product '+(selected[product.id]?'chosen':'')} key={product.id}><button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><img src={product.gridImage} alt={`${product.designCode} jewelry design`} loading="eager" decoding="async" /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div><button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button></div></article>)}</div></section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label><div className="line"/>{cart.length===0?<p className="muted">Select designs from the catalogue. Your work stays on this device when offline.</p>:<div className="cart">{cart.map(p=><div className="cart-item" key={p.id}><img src={p.gridImage} alt="" /><div><strong>{p.designCode}</strong><span>{grams(p.weightMg)} g</span><label>Qty<input aria-label={`Quantity for ${p.designCode}`} type="number" min="1" step="1" value={selected[p.id].quantity} onChange={e=>change(p.id,'quantity',e.target.value)} /></label><input aria-label={`Remark for ${p.designCode}`} value={selected[p.id].remark} onChange={e=>change(p.id,'remark',e.target.value)} placeholder="Optional remark" /></div></div>)}</div>}<div className="total"><span>Total weight</span><strong>{grams(total)} g</strong></div><button className="primary" onClick={()=>void makeOrder()}>Finalize &amp; generate PDF</button><small>PDF is generated locally. Cloud sync follows when connected.</small></aside></main>
+ <div className="grid">{filtered.map(product=><article className={'product '+(selected[product.id]?'chosen':'')} key={product.id}><button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><img src={product.gridImage} alt={`${product.designCode} jewelry design`} loading="eager" decoding="async" /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div><button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button></div></article>)}</div></section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label><div className="line"/>{cart.length===0?<p className="muted">Select designs from the catalogue. Your work stays on this device when offline.</p>:<div className="cart">{cart.map(p=><div className="cart-item" key={p.id}><img src={p.gridImage} alt="" /><div><strong>{p.designCode}</strong><span>{grams(p.weightMg)} g</span><label>Qty<input aria-label={`Quantity for ${p.designCode}`} type="number" min="1" step="1" value={selected[p.id].quantity} onChange={e=>change(p.id,'quantity',e.target.value)} /></label><input aria-label={`Remark for ${p.designCode}`} value={selected[p.id].remark} onChange={e=>change(p.id,'remark',e.target.value)} placeholder="Optional remark" /></div></div>)}</div>}<div className="total"><span>Total weight</span><strong>{grams(total)} g</strong></div><button className="primary" disabled={generatingPdf} onClick={()=>void makeOrder()}>{generatingPdf?'Generating PDF preview…':'Finalize & generate PDF'}</button><small>PDF is generated locally. Cloud sync follows when connected.</small></aside></main>
  {view==='vendors'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">vendor directory</p><h1>Vendors for every order.</h1></div><span>{vendors.filter(v=>!v.deleted).length} vendors</span></div><div className="management"><form onSubmit={addVendor}><h2>Add vendor</h2><label>Name<input name="name" required /></label><label>Business address<input name="address" required /></label><label>City<input name="city" required /></label><label>Type<select name="type"><option>WHOLESALE</option><option>RETAIL</option><option>CORPORATE</option></select></label><button className="primary">Save vendor</button></form><div className="records">{vendors.map(v=><article key={v.id}><strong>{v.name}</strong><span>{v.address}, {v.city}</span><small>{v.type}</small></article>)}</div></div></main>}
  {view==='products'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">catalogue administration</p><h1>Stage a single design with confidence.</h1></div><span>{products.filter(p=>!p.deleted).length} designs</span></div><ProductEntry categories={categories} subcategories={subcategories} onProduct={stageProduct}/></main>}
  {view==='batch'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">queued image workflow</p><h1>Batch design entry</h1></div><span>{products.filter(p=>!p.deleted).length} designs</span></div><BatchEntry categories={categories} subcategories={subcategories} onProduct={stageProduct}/></main>}
  {view==='taxonomy'&&<main className="single-view"><Taxonomy categories={categories} subcategories={subcategories} onCategory={addCategory} onSubcategory={addSubcategory} notice={setNotice}/></main>}
- {view==='history'&&<main className="single-view"><p className="eyebrow">synchronized history</p><h1>Orders retain their original details.</h1><div className="history">{orders.length?orders.map(o=><article key={o.id}><div><strong>#{String(o.orderNumber).padStart(4,'0')} · {o.vendor.name}</strong><span>{new Date(o.generatedAt||o.createdAt).toLocaleString()} · {o.salesperson}</span></div><b>{o.items.reduce((n,i)=>n+i.quantity,0)} pcs · {grams(o.items.reduce((n,i)=>n+i.weightMg*i.quantity,0))} g</b><details><summary>View design snapshots</summary>{o.items.map(i=><p key={i.productId}>{i.designCode} · {i.category}/{i.subcategory} · {i.quantity} × {grams(i.weightMg)} g</p>)}</details></article>):<p className="muted">No finalized orders on this device yet.</p>}</div></main>}
+  {view==='history'&&(
+   <main className="single-view">
+    <p className="eyebrow">synchronized history</p>
+    <h1>Orders retain their original details.</h1>
+    <div className="history">
+     {orders.length ? (
+      orders.map(o => {
+       const vObj = (o.vendor as Partial<Vendor> | undefined) || {}
+       const raw = o as unknown as Record<string, unknown>
+       const vendorName = String(vObj.name || raw.vendor_name_snapshot || raw.vendorName || 'Vendor')
+       const orderNum = Number(o.orderNumber || raw.order_number || 0)
+       const items = Array.isArray(o.items) ? o.items : []
+       const totalQty = items.reduce((n, i) => n + (i.quantity || 0), 0)
+       const totalWeight = items.reduce((n, i) => n + (i.weightMg || 0) * (i.quantity || 1), 0)
+       const dateStr = new Date(o.generatedAt || o.createdAt || (raw.generated_at as string) || Date.now()).toLocaleString()
+       const salesStr = String(o.salesperson || raw.salesperson_id || 'Salesperson')
+
+       return (
+        <article key={o.id}>
+         <div>
+          <strong>#{String(orderNum).padStart(4, '0')} · {vendorName}</strong>
+          <span>{dateStr} · {salesStr}</span>
+         </div>
+         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <b>{totalQty} pcs · {grams(totalWeight)} g</b>
+          <button
+           type="button"
+           className="quiet"
+           style={{ minHeight: '32px', padding: '0 10px', fontSize: '12px' }}
+           onClick={() => void openOrderPdfPreview(o)}
+           disabled={generatingPdf}
+          >
+           {generatingPdf ? 'Generating…' : 'Preview & Export PDF'}
+          </button>
+         </div>
+         <details>
+          <summary>View design snapshots ({items.length})</summary>
+          {items.length ? (
+           items.map((i, idx) => (
+            <p key={i.productId || idx}>
+             {i.designCode || 'Design'} · {i.category || ''}{i.subcategory ? `/${i.subcategory}` : ''} · {i.quantity || 1} × {grams(i.weightMg || 0)} g
+            </p>
+           ))
+          ) : (
+           <p className="muted" style={{ padding: '4px 0' }}>Order summary synchronized from cloud.</p>
+          )}
+         </details>
+        </article>
+       )
+      })
+     ) : (
+      <p className="muted">No finalized orders on this device yet.</p>
+     )}
+    </div>
+   </main>
+  )}
  {view==='storage'&&<main className="single-view storage"><div className="section-title"><div><p className="eyebrow">device replica</p><h1>Storage &amp; synchronization</h1></div><span>Checkpoint #{syncCheckpointVal}</span></div><div className="storage-card"><strong>{cloudBytes===null?'—':(cloudBytes/1024).toFixed(1)+' KB'}</strong><span>Cloud R2 catalogue images</span><p>Calculated from the authenticated organization’s confirmed grid/detail image metadata. This is the cloud catalogue total, not a browser cache estimate.</p><strong>{(bytes/1024).toFixed(1)} KB</strong><span>This device’s OPFS image replica</span><p>Images saved while working offline are counted here separately and remain on this device until explicitly cleared.</p><div style={{display:'flex',gap:'10px',alignItems:'center',padding:'8px 0'}}><span>Offline queue:</span><strong>{pendingCount} operation(s) pending sync</strong>{pendingCount>0&&<button className="quiet" style={{minHeight:'28px',padding:'0 8px',fontSize:'12px'}} onClick={async()=>{await storage.clearPendingOperations();await load();setNotice('Pending operations queue cleared.')}}>Clear queue</button>}</div><button className="primary" disabled={syncing||!online} onClick={()=>void triggerSync()}>{syncing?'Synchronizing…':'Run Full Synchronization'}</button><button className="quiet" disabled={recovering||!online} onClick={()=>void triggerImageRecovery()}>{recovering?'Recovering images…':'Scan & Recover Missing Images'}</button><button className="quiet" disabled={uploading||!online} onClick={()=>void uploadImages()}>{uploading?'Uploading pending images…':'Upload pending product images'}</button><button className="quiet" onClick={()=>{void load();void loadCloudStorage()}}>Refresh storage estimate</button></div></main>}
  {view==='devices'&&session.role==='ADMIN'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">security &amp; administration</p><h1>Authorized Device Sessions</h1></div><span>{devices.length} registered</span></div><div className="records">{devices.map(d=><article key={d.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><div><strong>{d.device_name}</strong><span>Device ID: {d.device_id}</span><small>Last seen: {new Date(d.last_seen_at).toLocaleString()} · Expires: {new Date(d.offline_authorization_expires_at).toLocaleDateString()}</small>{d.revoked_at&&<span style={{color:'var(--danger)'}}>Revoked on {new Date(d.revoked_at).toLocaleString()}</span>}</div>{!d.revoked_at&&<button className="quiet" style={{color:'var(--danger)',borderColor:'var(--danger)'}} onClick={()=>void revokeDevice(d.id)}>Revoke access</button>}</article>)}</div></main>}
   {detail && (
@@ -269,5 +352,61 @@ export function App(){
     </div>
    </div>
   )}
- <footer>Built by Aadit Mehta, contact mail: <a href="mailto:aaditbusiness15@gmail.com">aaditbusiness15@gmail.com</a></footer></div>
+   {pdfPreview && (
+    <div className="pdf-preview-backdrop" role="dialog" aria-modal="true" aria-label="Order PDF Preview">
+     <div className="pdf-preview-container">
+      <div className="pdf-preview-toolbar">
+       <div className="pdf-preview-toolbar-title">
+        <strong>{pdfPreview.fileName}</strong>
+        <span>
+         {(pdfPreview.blob.size / 1024).toFixed(1)} KB &middot; High-Resolution Order Sheet &middot; {pdfPreview.totalQuantity} pcs, {grams(pdfPreview.totalWeightMg)} g
+        </span>
+       </div>
+       <div className="pdf-preview-actions">
+        <button
+         type="button"
+         className="primary"
+         onClick={() => downloadPdfBlob(pdfPreview.blob, pdfPreview.fileName)}
+        >
+         📥 Download PDF
+        </button>
+        <button
+         type="button"
+         className="quiet"
+         onClick={async () => {
+          const shared = await sharePdfFile(pdfPreview.blob, pdfPreview.fileName, pdfPreview.order);
+          if (shared) {
+           setNotice('PDF shared successfully.');
+          } else {
+           downloadPdfBlob(pdfPreview.blob, pdfPreview.fileName);
+           setNotice('Native sharing not supported on this browser. File downloaded instead.');
+          }
+         }}
+        >
+         📤 Share PDF
+        </button>
+        <button
+         type="button"
+         className="close"
+         onClick={() => {
+          URL.revokeObjectURL(pdfPreview.blobUrl);
+          setPdfPreview(null);
+         }}
+         aria-label="Close PDF preview"
+        >
+         &times;
+        </button>
+       </div>
+      </div>
+      <div className="pdf-preview-body">
+       <iframe
+        className="pdf-preview-embed"
+        src={pdfPreview.blobUrl}
+        title="PDF Preview"
+       />
+      </div>
+     </div>
+    </div>
+   )}
+  <footer>Built by Aadit Mehta, contact mail: <a href="mailto:aaditbusiness15@gmail.com">aaditbusiness15@gmail.com</a></footer></div>
 }
