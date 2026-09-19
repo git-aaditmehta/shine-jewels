@@ -92,7 +92,7 @@ async function push(token: string, operation: Awaited<ReturnType<typeof storage.
   }
   if (operation.entity_type === 'product') {
     const initialItem = (await storage.products()).find(x => x.id === payload.id)
-    if (!initialItem) throw new Error('Queued product no longer exists locally.')
+    if (!initialItem) return null
     const categories = await storage.categories(), subcategories = await storage.subcategories()
     const localCategory = categories.find(x => x.id === initialItem.categoryId)
     const localSubcategory = subcategories.find(x => x.id === initialItem.subcategoryId)
@@ -148,9 +148,9 @@ export async function uploadPendingProductImages(token: string) {
   let uploaded = 0, failed = 0
   for (const operation of operations) {
     try {
-      await push(token, operation)
+      const res = await push(token, operation)
       await storage.completeOperation(operation.id)
-      uploaded++
+      if (res) uploaded++
     } catch (error) {
       await storage.completeOperation(operation.id, error instanceof Error ? error.message : 'Upload failed')
       failed++
@@ -212,9 +212,9 @@ export async function synchronize(token: string, onProgress?: (msg: string) => v
   let uploaded = 0, failed = 0
   for (const operation of pending) {
     try {
-      await push(token, operation)
+      const res = await push(token, operation)
       await storage.completeOperation(operation.id)
-      uploaded++
+      if (res) uploaded++
     } catch (error) {
       await storage.completeOperation(operation.id, error instanceof Error ? error.message : 'Sync failed')
       failed++
