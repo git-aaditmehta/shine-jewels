@@ -83,4 +83,12 @@ describe('business invariant helpers',()=>{
    'kalyan jewellers|mumbai'
   ])
  })
+  it('enforces 5 MB maximum file size cap for uploads', ()=>{
+   const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
+   const isAllowed = (bytes: number) => bytes <= MAX_IMAGE_SIZE_BYTES
+   expect(isAllowed(2 * 1024 * 1024)).toBe(true)
+   expect(isAllowed(5 * 1024 * 1024)).toBe(true)
+   expect(isAllowed(5 * 1024 * 1024 + 1)).toBe(false)
+   expect(isAllowed(10 * 1024 * 1024)).toBe(false)
+  })
 })
