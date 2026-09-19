@@ -1,7 +1,7 @@
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm'
 import type { BindableValue } from '@sqlite.org/sqlite-wasm'
 
-type RequestMessage = { id: string; sql?: string; bind?: BindableValue[]; action?: 'put-image'|'get-image'; path?: string; data?: string }
+type RequestMessage = { id: string; sql?: string; bind?: BindableValue[]; action?: 'put-image'|'get-image'|'has-image'|'delete-image'; path?: string; data?: string }
 type ResponseMessage = { id: string; rows?: unknown[]; error?: string; persistent: boolean }
 
 type LocalDatabase=InstanceType<Awaited<ReturnType<typeof sqlite3InitModule>>['oo1']['DB']>
@@ -45,6 +45,29 @@ self.addEventListener('message', async (event: MessageEvent<RequestMessage>) => 
       if(!event.data.path)throw new Error('Image path is required.')
       const file=await (await imageFile(event.data.path,false)).getFile()
       self.postMessage({id,rows:[await file.text()],persistent} satisfies ResponseMessage);return
+    }
+    if(event.data.action==='has-image'){
+      if(!event.data.path)throw new Error('Image path is required.')
+      try {
+        await imageFile(event.data.path,false)
+        self.postMessage({id,rows:[true],persistent} satisfies ResponseMessage)
+      } catch {
+        self.postMessage({id,rows:[false],persistent} satisfies ResponseMessage)
+      }
+      return
+    }
+    if(event.data.action==='delete-image'){
+      if(!event.data.path)throw new Error('Image path is required.')
+      try {
+        const storage=(self as unknown as {navigator:{storage:{getDirectory:()=>Promise<FileSystemDirectoryHandle>}}}).navigator.storage
+        const root=await storage.getDirectory(),images=await root.getDirectoryHandle('shine-jewels-images',{create:false})
+        await images.removeEntry(event.data.path)
+        db.exec({sql:'DELETE FROM storage_accounting WHERE key=?',bind:[`image:${event.data.path}`]})
+        self.postMessage({id,rows:[true],persistent} satisfies ResponseMessage)
+      } catch {
+        self.postMessage({id,rows:[false],persistent} satisfies ResponseMessage)
+      }
+      return
     }
     if(!sql)throw new Error('SQL is required.')
     const rows: unknown[] = []
