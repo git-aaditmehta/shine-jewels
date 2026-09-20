@@ -122,21 +122,30 @@ export async function uploadProductOnline(token: string, productId: string): Pro
   if (!remoteSubcategory) remoteSubcategory = await workerApi<Record<string, unknown>>('/subcategories', { method: 'POST', token, body: { id: localSubcategory.id, name: localSubcategory.name, categoryId: targetCategoryId } })
   await storage.remapSubcategoryId(localSubcategory.id, String(remoteSubcategory.id))
 
-  const finalItem = (await storage.products()).find(x => x.id === productId)
+  const finalItem = (await storage.products()).find(x => x.id === productId) || (await storage.archivedProducts()).find(x => x.id === productId)
   if (!finalItem) throw new Error('Product lost during subcategory remap.')
 
-  let gridPre: { blob: Blob; checksum: string; contentType: string } | undefined
-  let detailPre: { blob: Blob; checksum: string; contentType: string } | undefined
-  if (finalItem.gridImage === finalItem.detailImage && finalItem.gridImage) {
-    const shared = await sourceToBlobAndChecksum(finalItem.gridImage)
-    gridPre = shared
-    detailPre = shared
-  }
+  let gridImage = { key: finalItem.gridImageKey || '', sizeBytes: finalItem.gridImageSizeBytes || 0, checksum: finalItem.gridImageChecksum || '' }
+  let detailImage = { key: finalItem.detailImageKey || '', sizeBytes: finalItem.detailImageSizeBytes || 0, checksum: finalItem.detailImageChecksum || '' }
 
-  const [gridImage, detailImage] = await Promise.all([
-    directUpload(token, finalItem.id, 'grid', finalItem.gridImage, finalItem.imageVersion, gridPre),
-    directUpload(token, finalItem.id, 'detail', finalItem.detailImage, finalItem.imageVersion, detailPre)
-  ])
+  const needsGridUpload = finalItem.gridImage.startsWith('data:') || !finalItem.gridImageKey
+  const needsDetailUpload = finalItem.detailImage.startsWith('data:') || !finalItem.detailImageKey
+
+  if (needsGridUpload || needsDetailUpload) {
+    let gridPre: { blob: Blob; checksum: string; contentType: string } | undefined
+    let detailPre: { blob: Blob; checksum: string; contentType: string } | undefined
+    if (finalItem.gridImage === finalItem.detailImage && finalItem.gridImage) {
+      const shared = await sourceToBlobAndChecksum(finalItem.gridImage)
+      gridPre = shared
+      detailPre = shared
+    }
+    if (needsGridUpload) {
+      gridImage = await directUpload(token, finalItem.id, 'grid', finalItem.gridImage, finalItem.imageVersion, gridPre)
+    }
+    if (needsDetailUpload) {
+      detailImage = await directUpload(token, finalItem.id, 'detail', finalItem.detailImage, finalItem.imageVersion, detailPre)
+    }
+  }
   const res = await workerApi<Product & { id: string }>('/products', {
     method: 'POST',
     token,
@@ -192,7 +201,20 @@ export async function push(token: string, operation: Awaited<ReturnType<typeof s
     return workerApi('/orders', { method: 'POST', token, body: { id: order.id, vendorId: order.vendor.id, items: order.items.map(item => ({ productId: item.productId, quantity: item.quantity, remark: item.remark })) } })
   }
   if (operation.entity_type === 'product') {
-    const initialItem = (await storage.products()).find(x => x.id === payload.id)
+    if (operation.operation === 'ARCHIVE') {
+      return workerApi(`/products/${payload.id}/archive`, { method: 'POST', token })
+    }
+    if (operation.operation === 'RESTORE') {
+      try {
+        return await workerApi(`/products/${payload.id}/restore`, { method: 'POST', token })
+      } catch (err) {
+        if (err instanceof Error && (err.message.includes('not found') || err.message.includes('404'))) {
+          return await uploadProductOnline(token, String(payload.id))
+        }
+        throw err
+      }
+    }
+    const initialItem = (await storage.products()).find(x => x.id === payload.id) || (await storage.archivedProducts()).find(x => x.id === payload.id)
     if (!initialItem) return null
     return uploadProductOnline(token, String(payload.id))
   }

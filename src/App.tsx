@@ -32,6 +32,7 @@ import { createOrderPdfBlob, downloadPdfBlob, sharePdfFile, type GeneratedPdfRes
 import { storage } from './storage'
 import type { Category, Order, Product, Session, Subcategory, Vendor } from './types'
 import { BatchEntry, ProductEntry, Taxonomy } from './Management'
+import { EditProductModal, ArchiveConfirmModal } from './ProductModals'
 
 const grams=(mg:number)=>(mg/1000).toFixed(3)
 const uid=()=>crypto.randomUUID()
@@ -71,6 +72,7 @@ export function App(){
  const [session,setSession]=useState<Session|null>(()=>{try{const value=sessionStorage.getItem(sessionKey);return value?JSON.parse(value) as Session:null}catch{return null}})
  const [products,setProducts]=useState<Product[]>([]),[categories,setCategories]=useState<Category[]>([]),[subcategories,setSubcategories]=useState<Subcategory[]>([]),[vendors,setVendors]=useState<Vendor[]>([]),[orders,setOrders]=useState<Order[]>([])
  const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number;remark:string}>>({}),[vendorId,setVendorId]=useState(''),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[pdfPreview,setPdfPreview]=useState<GeneratedPdfResult|null>(null),[generatingPdf,setGeneratingPdf]=useState(false),[bytes,setBytes]=useState(0),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<{id:string;device_id:string;device_name:string;last_seen_at:string;offline_authorization_expires_at:string;revoked_at:string|null}[]>([])
+ const [editingProduct,setEditingProduct]=useState<Product|null>(null),[archivingProduct,setArchivingProduct]=useState<Product|null>(null),[archivedProductsList,setArchivedProductsList]=useState<Product[]>([]),[adminProductTab,setAdminProductTab]=useState<'active'|'add'|'archived'>('active'),[adminSearch,setAdminSearch]=useState('')
  const maxPossibleWeight = useMemo(()=>{const active=products.filter(p=>!p.deleted).map(p=>p.weightMg/1000);return active.length?Math.max(50,Math.ceil(Math.max(...active))):100},[products])
  const currentMinVal = minWeight !== '' ? Math.max(0, Math.round(Number(minWeight))) : 0
  const currentMaxVal = maxWeight !== '' ? Math.min(maxPossibleWeight, Math.round(Number(maxWeight))) : maxPossibleWeight
@@ -129,7 +131,7 @@ export function App(){
   window.addEventListener('keydown', handleKeyDown)
   return () => window.removeEventListener('keydown', handleKeyDown)
  }, [detail, activeIndex, activeList, hasPrev, hasNext])
- const load=async()=>{const [p,c,s,v,o,b,cp,pending]=await Promise.all([storage.products(),storage.categories(),storage.subcategories(),storage.vendors(),storage.orders(),storage.storageBytes(),storage.syncCheckpoint(),storage.pendingOperations()]);setProducts(p);setCategories(c);setSubcategories(s);setVendors(v);setOrders(o);setBytes(b);setSyncCheckpointVal(cp);setPendingCount(pending.length)}
+ const load=async()=>{const [p,c,s,v,o,b,cp,pending,archived]=await Promise.all([storage.products(),storage.categories(),storage.subcategories(),storage.vendors(),storage.orders(),storage.storageBytes(),storage.syncCheckpoint(),storage.pendingOperations(),storage.archivedProducts()]);setProducts(p);setCategories(c);setSubcategories(s);setVendors(v);setOrders(o);setBytes(b);setSyncCheckpointVal(cp);setPendingCount(pending.length);setArchivedProductsList(archived)}
  const loadCloudStorage=async()=>{const saved=sessionStorage.getItem(sessionKey);if(!saved)return;try{setCloudBytes(await cloudImageStorageBytes((JSON.parse(saved) as {token:string}).token))}catch{setCloudBytes(null)}}
  const loadDevices=async()=>{const saved=sessionStorage.getItem(sessionKey);if(!saved)return;try{const list=await workerApi<{id:string;device_id:string;device_name:string;last_seen_at:string;offline_authorization_expires_at:string;revoked_at:string|null}[]>('/devices',{token:(JSON.parse(saved) as {token:string}).token});setDevices(list)}catch(err){setNotice(err instanceof Error?err.message:'Unable to load devices')}}
  const revokeDevice=async(deviceId:string)=>{const saved=sessionStorage.getItem(sessionKey);if(!saved)return;try{await workerApi(`/devices/${deviceId}/revoke`,{method:'POST',token:(JSON.parse(saved) as {token:string}).token});setNotice('Device session revoked. Device will be logged out upon reconnect.');await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Unable to revoke device session')}}
@@ -155,11 +157,13 @@ export function App(){
   (async () => {
    let uploaded = 0;
    let lastError = '';
+   let lastOp = '';
    try {
     while (navigator.onLine) {
      const pending = (await storage.pendingOperations()).filter(op => op.entity_type === 'product');
      if (pending.length === 0) break;
      const op = pending[0];
+     lastOp = op.operation;
      try {
       const res = await push(token, op);
       await storage.completeOperation(op.id);
@@ -167,7 +171,13 @@ export function App(){
        uploaded++;
        await load();
        await loadCloudStorage();
-       setNotice(`Cloud upload in progress: ${uploaded} design(s) uploaded to R2…`);
+       if (op.operation === 'RESTORE') {
+        setNotice('Design restored and synchronized with cloud catalogue.');
+       } else if (op.operation === 'ARCHIVE') {
+        setNotice('Design archived and synchronized with cloud catalogue.');
+       } else {
+        setNotice(`Cloud synchronization in progress: ${uploaded} design(s) updated…`);
+       }
       }
      } catch (err) {
       lastError = err instanceof Error ? err.message : 'Upload failed';
@@ -182,9 +192,15 @@ export function App(){
     await load();
     await loadCloudStorage();
     if (lastError) {
-     setNotice(`Upload stopped: ${lastError}. Design remains in local queue for retry.`);
+     setNotice(`Sync stopped: ${lastError}. Changes remain in local queue for retry.`);
     } else if (uploaded > 0) {
-     setNotice(`Cloud upload completed: ${uploaded} design(s) successfully uploaded to R2 and synchronized.`);
+     if (lastOp === 'RESTORE') {
+      setNotice('Design successfully restored to active cloud catalogue.');
+     } else if (lastOp === 'ARCHIVE') {
+      setNotice('Design successfully archived in cloud catalogue.');
+     } else {
+      setNotice(`Cloud synchronization completed: ${uploaded} design(s) successfully synchronized.`);
+     }
     }
    }
   })();
@@ -214,6 +230,36 @@ export function App(){
    setNotice(error instanceof Error?`Image could not be saved on this device: ${error.message}`:'Image could not be saved on this device.')
   }
  }
+  const handleSaveEdit=async(updated:Product)=>{
+   try{
+    await storage.updateProduct(updated)
+    await load()
+    setNotice(`${updated.designCode} updated successfully.`)
+    const saved=sessionStorage.getItem(sessionKey)
+    const token=saved?(JSON.parse(saved) as {token:string}).token:''
+    if(navigator.onLine&&token){triggerBackgroundUpload()}
+   }catch(err){setNotice(err instanceof Error?`Failed to update design: ${err.message}`:'Failed to update design.')}
+  }
+  const handleConfirmArchive=async(product:Product)=>{
+   try{
+    await storage.archiveProduct(product.id)
+    await load()
+    setNotice(`${product.designCode} archived. You can view or restore it in Catalogue Administration.`)
+    const saved=sessionStorage.getItem(sessionKey)
+    const token=saved?(JSON.parse(saved) as {token:string}).token:''
+    if(navigator.onLine&&token){triggerBackgroundUpload()}
+   }catch(err){setNotice(err instanceof Error?`Failed to archive design: ${err.message}`:'Failed to archive design.')}
+  }
+  const handleRestoreProduct=async(product:Product)=>{
+   try{
+    await storage.restoreProduct(product.id)
+    await load()
+    setNotice(`${product.designCode} restored to active catalogue.`)
+    const saved=sessionStorage.getItem(sessionKey)
+    const token=saved?(JSON.parse(saved) as {token:string}).token:''
+    if(navigator.onLine&&token){triggerBackgroundUpload()}
+   }catch(err){setNotice(err instanceof Error?`Failed to restore design: ${err.message}`:'Failed to restore design.')}
+  }
  const addCategory=async(c:Category)=>{await storage.saveCategory(c);await load()}
  const addSubcategory=async(s:Subcategory)=>{await storage.saveSubcategory(s);await load()}
  const cart=products.filter(p=>selected[p.id]); const total=cart.reduce((n,p)=>n+p.weightMg*selected[p.id].quantity,0)
@@ -226,10 +272,155 @@ export function App(){
   {notice&&<div className="notice" role="status">{notice}<button onClick={()=>setNotice('')} aria-label="Dismiss message">×</button></div>}
   <main className="catalogue-layout" style={{display:view==='catalogue'?undefined:'none'}}><section className="catalogue"><div className="section-title"><div><p className="eyebrow">design library</p><h1>Find the right piece, without waiting.</h1></div><span>{filtered.length} designs</span></div><div className="filters"><label>Search design code<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="e.g. SJ-1001" /></label><label>Category<select value={category} onChange={e=>{setCategory(e.target.value);setSubcategory('')}}><option value="">All categories</option>{categories.map(c=><option value={c.id} key={c.id}>{c.name}</option>)}</select></label><label>Subcategory<select value={subcategory} onChange={e=>setSubcategory(e.target.value)}><option value="">All subcategories</option>{subcategories.filter(s=>!category||s.categoryId===category).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label><button className="quiet" onClick={clearFilters}>Clear filters</button></div>
   <div className="weight-filter-bar"><div className="weight-slider-group"><div className="weight-slider-header"><span>Weight Range Slider</span><span>{currentMinVal} g &mdash; {currentMaxVal} g</span></div><div className="dual-slider-track-box"><div className="dual-slider-rail" /><div className="dual-slider-fill" style={{left:`${leftPercent}%`,width:`${widthPercent}%`}} /><input aria-label="Minimum weight slider" className="dual-slider-thumb" type="range" min={0} max={maxPossibleWeight} step={1} value={currentMinVal} onPointerDown={()=>setSliderActive('min')} onChange={onSliderMinChange} style={{zIndex:sliderActive==='min'?5:(currentMinVal>maxPossibleWeight-5?5:3)}} /><input aria-label="Maximum weight slider" className="dual-slider-thumb" type="range" min={0} max={maxPossibleWeight} step={1} value={currentMaxVal} onPointerDown={()=>setSliderActive('max')} onChange={onSliderMaxChange} style={{zIndex:sliderActive==='max'?5:4}} /></div></div><div className="weight-presets" role="group" aria-label="Quick weight presets"><button type="button" className={`weight-preset-btn ${!minWeight&&!maxWeight?'active':''}`} onClick={()=>applyWeightPreset('','')}>All</button><button type="button" className={`weight-preset-btn ${minWeight===''&&maxWeight==='5'?'active':''}`} onClick={()=>applyWeightPreset('','5')}>&lt; 5g</button><button type="button" className={`weight-preset-btn ${minWeight==='5'&&maxWeight==='15'?'active':''}`} onClick={()=>applyWeightPreset('5','15')}>5&ndash;15g</button><button type="button" className={`weight-preset-btn ${minWeight==='15'&&maxWeight==='30'?'active':''}`} onClick={()=>applyWeightPreset('15','30')}>15&ndash;30g</button><button type="button" className={`weight-preset-btn ${minWeight==='30'&&maxWeight===''?'active':''}`} onClick={()=>applyWeightPreset('30','')}>30g+</button></div><div className="weight-inputs"><label>Min (g)<input type="number" step="0.001" min="0" placeholder="0.000" value={minWeight} onChange={e=>setMinWeight(e.target.value)} /></label><span>to</span><label>Max (g)<input type="number" step="0.001" min="0" placeholder="Max" value={maxWeight} onChange={e=>setMaxWeight(e.target.value)} /></label></div></div>
- <div className="grid">{filtered.map(product=><article className={'product '+(selected[product.id]?'chosen':'')} key={product.id}><button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><img src={product.gridImage} alt={`${product.designCode} jewelry design`} loading="eager" decoding="async" /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div><button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button></div></article>)}</div></section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label><div className="line"/>{cart.length===0?<p className="muted">Select designs from the catalogue. Your work stays on this device when offline.</p>:<div className="cart">{cart.map(p=><div className="cart-item" key={p.id}><img src={p.gridImage} alt="" /><div><strong>{p.designCode}</strong><span>{grams(p.weightMg)} g</span><label>Qty<input aria-label={`Quantity for ${p.designCode}`} type="number" min="1" step="1" value={selected[p.id].quantity} onChange={e=>change(p.id,'quantity',e.target.value)} /></label><input aria-label={`Remark for ${p.designCode}`} value={selected[p.id].remark} onChange={e=>change(p.id,'remark',e.target.value)} placeholder="Optional remark" /></div></div>)}</div>}<div className="total"><span>Total weight</span><strong>{grams(total)} g</strong></div><button className="primary" disabled={generatingPdf} onClick={()=>void makeOrder()}>{generatingPdf?'Generating PDF preview…':'Finalize & generate PDF'}</button><small>PDF is generated locally. Cloud sync follows when connected.</small></aside></main>
- {view==='vendors'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">vendor directory</p><h1>Vendors for every order.</h1></div><span>{vendors.filter(v=>!v.deleted).length} vendors</span></div><div className="management"><form onSubmit={addVendor}><h2>Add vendor</h2><label>Name<input name="name" required /></label><label>Business address<input name="address" required /></label><label>City<input name="city" required /></label><label>Type<select name="type"><option>WHOLESALE</option><option>RETAIL</option><option>CORPORATE</option></select></label><button className="primary">Save vendor</button></form><div className="records">{vendors.map(v=><article key={v.id}><strong>{v.name}</strong><span>{v.address}, {v.city}</span><small>{v.type}</small></article>)}</div></div></main>}
- {view==='products'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">catalogue administration</p><h1>Stage a single design with confidence.</h1></div><span>{products.filter(p=>!p.deleted).length} designs</span></div><ProductEntry categories={categories} subcategories={subcategories} onProduct={stageProduct}/></main>}
- {view==='batch'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">queued image workflow</p><h1>Batch design entry</h1></div><span>{products.filter(p=>!p.deleted).length} designs</span></div><BatchEntry categories={categories} subcategories={subcategories} onProduct={stageProduct}/></main>}
+  <div className="grid">{filtered.map(product=><article className={'product '+(selected[product.id]?'chosen':'')} key={product.id}><button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><img src={product.gridImage} alt={`${product.designCode} jewelry design`} loading="eager" decoding="async" /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div><button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button></div></article>)}</div></section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label><div className="line"/>{cart.length===0?<p className="muted">Select designs from the catalogue. Your work stays on this device when offline.</p>:<div className="cart">{cart.map(p=><div className="cart-item" key={p.id}><img src={p.gridImage} alt="" /><div><strong>{p.designCode}</strong><span>{grams(p.weightMg)} g</span><label>Qty<input aria-label={`Quantity for ${p.designCode}`} type="number" min="1" step="1" value={selected[p.id].quantity} onChange={e=>change(p.id,'quantity',e.target.value)} /></label><input aria-label={`Remark for ${p.designCode}`} value={selected[p.id].remark} onChange={e=>change(p.id,'remark',e.target.value)} placeholder="Optional remark" /></div></div>)}</div>}<div className="total"><span>Total weight</span><strong>{grams(total)} g</strong></div><button className="primary" disabled={generatingPdf} onClick={()=>void makeOrder()}>{generatingPdf?'Generating PDF preview…':'Finalize & generate PDF'}</button><small>PDF is generated locally. Cloud sync follows when connected.</small></aside></main>
+  {view==='vendors'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">vendor directory</p><h1>Vendors for every order.</h1></div><span>{vendors.filter(v=>!v.deleted).length} vendors</span></div><div className="management"><form onSubmit={addVendor}><h2>Add vendor</h2><label>Name<input name="name" required /></label><label>Business address<input name="address" required /></label><label>City<input name="city" required /></label><label>Type<select name="type"><option>WHOLESALE</option><option>RETAIL</option><option>CORPORATE</option></select></label><button className="primary">Save vendor</button></form><div className="records">{vendors.map(v=><article key={v.id}><strong>{v.name}</strong><span>{v.address}, {v.city}</span><small>{v.type}</small></article>)}</div></div></main>}
+  {view==='products'&&(
+   <main className="single-view">
+    <div className="section-title">
+     <div>
+      <p className="eyebrow">catalogue administration</p>
+      <h1>Manage designs &amp; active status.</h1>
+     </div>
+     <span>{products.filter(p=>!p.deleted).length} active · {archivedProductsList.length} archived</span>
+    </div>
+
+    <div className="catalogue-admin-tabs">
+     <button
+      type="button"
+      className={`catalogue-admin-tab ${adminProductTab==='active'?'active':''}`}
+      onClick={()=>setAdminProductTab('active')}
+     >
+      Active Designs <span className="admin-badge">{products.filter(p=>!p.deleted).length}</span>
+     </button>
+     <button
+      type="button"
+      className={`catalogue-admin-tab ${adminProductTab==='add'?'active':''}`}
+      onClick={()=>setAdminProductTab('add')}
+     >
+      + Add New Design
+     </button>
+     <button
+      type="button"
+      className={`catalogue-admin-tab ${adminProductTab==='archived'?'active':''}`}
+      onClick={()=>setAdminProductTab('archived')}
+     >
+      Archived Designs <span className="admin-badge">{archivedProductsList.length}</span>
+     </button>
+    </div>
+
+    {adminProductTab==='add'&&(
+     <ProductEntry categories={categories} subcategories={subcategories} onProduct={stageProduct}/>
+    )}
+
+    {adminProductTab==='active'&&(
+     <div>
+      <div style={{marginBottom:'var(--space-4)'}}>
+       <input
+        type="search"
+        placeholder="Search active designs by code..."
+        value={adminSearch}
+        onChange={e=>setAdminSearch(e.target.value)}
+        style={{maxWidth:'360px'}}
+       />
+      </div>
+      <div className="admin-card-list">
+       {products
+        .filter(p=>!p.deleted&&(!adminSearch||p.designCode.toLowerCase().includes(adminSearch.toLowerCase().trim())))
+        .map(p=>{
+         const cat=categories.find(c=>c.id===p.categoryId)?.name||'Jewelry'
+         const sub=subcategories.find(s=>s.id===p.subcategoryId)?.name
+         return (
+          <div key={p.id} className="admin-product-row">
+           <div className="admin-product-row-left">
+            <img src={p.gridImage} alt={p.designCode}/>
+            <div>
+             <strong style={{fontSize:'15px'}}>{p.designCode}</strong>
+             <span style={{fontSize:'13px',color:'var(--muted)',display:'block'}}>
+              {cat}{sub?` / ${sub}`:''} &middot; {grams(p.weightMg)} g
+             </span>
+             <small style={{color:'var(--gold)',fontSize:'11px'}}>Image v{p.imageVersion||1} &middot; {p.syncState}</small>
+            </div>
+           </div>
+           <div className="admin-product-row-actions">
+            <button
+             type="button"
+             className="quiet"
+             style={{minHeight:'36px',padding:'0 12px',fontSize:'12px'}}
+             onClick={()=>setEditingProduct(p)}
+            >
+             ✏️ Edit
+            </button>
+            <button
+             type="button"
+             className="quiet"
+             style={{minHeight:'36px',padding:'0 12px',fontSize:'12px',color:'var(--danger)',borderColor:'var(--danger)'}}
+             onClick={()=>setArchivingProduct(p)}
+            >
+             🗑️ Archive
+            </button>
+           </div>
+          </div>
+         )
+        })}
+      </div>
+     </div>
+    )}
+
+    {adminProductTab==='archived'&&(
+     <div>
+      <div style={{padding:'12px 16px',background:'var(--gold-soft)',borderRadius:'10px',marginBottom:'var(--space-4)',fontSize:'13px',color:'var(--ink)'}}>
+       ℹ️ Archived designs are hidden from the active sales catalogue and new orders, but existing orders retain historical snapshots. You can restore them anytime.
+      </div>
+      <div style={{marginBottom:'var(--space-4)'}}>
+       <input
+        type="search"
+        placeholder="Search archived designs by code..."
+        value={adminSearch}
+        onChange={e=>setAdminSearch(e.target.value)}
+        style={{maxWidth:'360px'}}
+       />
+      </div>
+      <div className="admin-card-list">
+       {archivedProductsList.length===0?(
+        <p className="muted" style={{padding:'20px 0'}}>No archived designs. All designs in the catalogue are active.</p>
+       ):(
+        archivedProductsList
+         .filter(p=>!adminSearch||p.designCode.toLowerCase().includes(adminSearch.toLowerCase().trim()))
+         .map(p=>{
+          const cat=categories.find(c=>c.id===p.categoryId)?.name||'Jewelry'
+          const sub=subcategories.find(s=>s.id===p.subcategoryId)?.name
+          return (
+           <div key={p.id} className="admin-product-row" style={{opacity:0.9}}>
+            <div className="admin-product-row-left">
+             <img src={p.gridImage} alt={p.designCode}/>
+             <div>
+              <strong style={{fontSize:'15px'}}>{p.designCode}</strong>
+              <span style={{fontSize:'13px',color:'var(--muted)',display:'block'}}>
+               {cat}{sub?` / ${sub}`:''} &middot; {grams(p.weightMg)} g
+              </span>
+              <small style={{color:'var(--danger)',fontSize:'11px'}}>Archived / Inactive</small>
+             </div>
+            </div>
+            <div className="admin-product-row-actions">
+             <button
+              type="button"
+              className="quiet"
+              style={{minHeight:'36px',padding:'0 14px',fontSize:'12px',fontWeight:700,color:'var(--green)',borderColor:'var(--green)'}}
+              onClick={()=>void handleRestoreProduct(p)}
+             >
+              🔄 Restore to Catalogue
+             </button>
+            </div>
+           </div>
+          )
+         })
+       )}
+      </div>
+     </div>
+    )}
+   </main>
+  )}
+  {view==='batch'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">queued image workflow</p><h1>Batch design entry</h1></div><span>{products.filter(p=>!p.deleted).length} designs</span></div><BatchEntry categories={categories} subcategories={subcategories} onProduct={stageProduct}/></main>}
  {view==='taxonomy'&&<main className="single-view"><Taxonomy categories={categories} subcategories={subcategories} onCategory={addCategory} onSubcategory={addSubcategory} notice={setNotice}/></main>}
   {view==='history'&&(
    <main className="single-view">
@@ -407,6 +598,22 @@ export function App(){
       </div>
      </div>
     </div>
+   )}
+   {editingProduct && (
+    <EditProductModal
+     product={editingProduct}
+     categories={categories}
+     subcategories={subcategories}
+     onSave={handleSaveEdit}
+     onClose={() => setEditingProduct(null)}
+    />
+   )}
+   {archivingProduct && (
+    <ArchiveConfirmModal
+     product={archivingProduct}
+     onConfirm={() => handleConfirmArchive(archivingProduct)}
+     onClose={() => setArchivingProduct(null)}
+    />
    )}
   <footer>Built by Aadit Mehta, contact mail: <a href="mailto:aaditbusiness15@gmail.com">aaditbusiness15@gmail.com</a></footer></div>
 }

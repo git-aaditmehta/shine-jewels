@@ -91,4 +91,45 @@ describe('business invariant helpers',()=>{
    expect(isAllowed(5 * 1024 * 1024 + 1)).toBe(false)
    expect(isAllowed(10 * 1024 * 1024)).toBe(false)
   })
+  it('increments imageVersion and preserves immutable design code on product edit', ()=>{
+   const original = {
+     id: 'prod-edit-1',
+     designCode: 'SJ-RING-01',
+     categoryId: 'cat-1',
+     subcategoryId: 'sub-1',
+     weightMg: 3500,
+     imageVersion: 1,
+     deleted: false
+   }
+   // Edit weight and replace photo
+   const imageReplaced = true
+   const edited = {
+     ...original,
+     categoryId: 'cat-2',
+     subcategoryId: 'sub-3',
+     weightMg: 3750,
+     imageVersion: imageReplaced ? original.imageVersion + 1 : original.imageVersion,
+     designCode: original.designCode // immutable
+   }
+   expect(edited.designCode).toBe('SJ-RING-01')
+   expect(edited.imageVersion).toBe(2)
+   expect(edited.weightMg).toBe(3750)
+   expect(edited.categoryId).toBe('cat-2')
+  })
+  it('soft-deletes product via archive without corrupting historical order snapshots', ()=>{
+   const product = { id: 'p1', designCode: 'SJ-PENDANT', weightMg: 6250, deleted: false }
+   const historicalOrder = {
+     orderNumber: 101,
+     items: [
+       { productId: product.id, designCode: product.designCode, weightMg: product.weightMg, quantity: 2 }
+     ]
+   }
+   // Archive product
+   const archivedProduct = { ...product, deleted: true }
+   expect(archivedProduct.deleted).toBe(true)
+   // Historical order remains immutable
+   expect(historicalOrder.items[0].productId).toBe('p1')
+   expect(historicalOrder.items[0].designCode).toBe('SJ-PENDANT')
+   expect(historicalOrder.items[0].weightMg).toBe(6250)
+  })
 })

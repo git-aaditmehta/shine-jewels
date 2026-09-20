@@ -1,7 +1,7 @@
 import { LocalSqlite } from './local-sqlite'
 import type { Category, Order, Product, Session, Subcategory, Vendor } from './types'
 export type PendingOperation={id:string;idempotency_key:string;entity_type:string;operation:string;payload:string;retry_count:number}
-export interface CatalogueStorage { products():Promise<Product[]>;hasLocalReplica():Promise<boolean>;saveProduct(x:Product,queue?:boolean):Promise<void>;getImage(path:string):Promise<string|null>;saveImageData(path:string,dataUrl:string):Promise<void>;hasImage(path:string):Promise<boolean>;deleteImage(path:string):Promise<void>;categories():Promise<Category[]>;saveCategory(x:Category):Promise<void>;subcategories():Promise<Subcategory[]>;saveSubcategory(x:Subcategory):Promise<void>;vendors():Promise<Vendor[]>;saveVendor(x:Vendor):Promise<void>;orders():Promise<Order[]>;saveOrder(x:Order):Promise<void>;session():Promise<Session|null>;saveSession(x:Session):Promise<void>;clearSession():Promise<void>;storageBytes():Promise<number>;syncCheckpoint():Promise<number>;setSyncCheckpoint(x:number):Promise<void>;pendingOperations():Promise<PendingOperation[]>;completeOperation(id:string,error?:string):Promise<void>;clearPendingOperations():Promise<void>;remapCategoryId(from:string,to:string):Promise<void>;remapSubcategoryId(from:string,to:string):Promise<void>;remapProductId(fromId:string,toId:string,updated:Product):Promise<void>;remapVendorId(fromId:string,toId:string,updated:Vendor):Promise<void>;applyRemoteChange(x:{entityType:string;entityId:string;operation:string;payload:unknown}):Promise<void>;cacheRemoteImage(productId:string,representation:'grid'|'detail',url:string,version:number,expectedChecksum?:string,expectedSize?:number):Promise<void> }
+export interface CatalogueStorage { products():Promise<Product[]>;archivedProducts():Promise<Product[]>;archiveProduct(id:string):Promise<void>;restoreProduct(id:string):Promise<void>;updateProduct(x:Product):Promise<void>;hasLocalReplica():Promise<boolean>;saveProduct(x:Product,queue?:boolean):Promise<void>;getImage(path:string):Promise<string|null>;saveImageData(path:string,dataUrl:string):Promise<void>;hasImage(path:string):Promise<boolean>;deleteImage(path:string):Promise<void>;categories():Promise<Category[]>;saveCategory(x:Category):Promise<void>;subcategories():Promise<Subcategory[]>;saveSubcategory(x:Subcategory):Promise<void>;vendors():Promise<Vendor[]>;saveVendor(x:Vendor):Promise<void>;orders():Promise<Order[]>;saveOrder(x:Order):Promise<void>;session():Promise<Session|null>;saveSession(x:Session):Promise<void>;clearSession():Promise<void>;storageBytes():Promise<number>;syncCheckpoint():Promise<number>;setSyncCheckpoint(x:number):Promise<void>;pendingOperations():Promise<PendingOperation[]>;completeOperation(id:string,error?:string):Promise<void>;clearPendingOperations():Promise<void>;remapCategoryId(from:string,to:string):Promise<void>;remapSubcategoryId(from:string,to:string):Promise<void>;remapProductId(fromId:string,toId:string,updated:Product):Promise<void>;remapVendorId(fromId:string,toId:string,updated:Vendor):Promise<void>;applyRemoteChange(x:{entityType:string;entityId:string;operation:string;payload:unknown}):Promise<void>;cacheRemoteImage(productId:string,representation:'grid'|'detail',url:string,version:number,expectedChecksum?:string,expectedSize?:number):Promise<void> }
 class SqliteOpfsStorage implements CatalogueStorage {
  private db=new LocalSqlite();private ready=this.bootstrap()
  private imageMemoryCache=new Map<string,string>()
@@ -64,36 +64,76 @@ class SqliteOpfsStorage implements CatalogueStorage {
    await this.db.queueOperation('product','UPSERT',{id:x.id});
   }
  }
- async products(){
-  const items=await this.values<Product>('product')
-  const byCode=new Map<string,Product>()
-  for(const item of items){
-   const key=item.designCode.trim().toLowerCase()
-   const curr=byCode.get(key)
-   if(!curr){byCode.set(key,item)}
-   else if(curr.syncState!=='SYNCED'&&item.syncState==='SYNCED'){byCode.set(key,item)}
+  private async resolveProductImages(items: Product[]): Promise<Product[]> {
+    const r2Base = (import.meta.env.VITE_R2_PUBLIC_BASE_URL || 'https://pub-ddd4389cc31a46b6b365e21911f96e1f.r2.dev').replace(/\/$/, '')
+    return Promise.all(items.map(async item => {
+      const load = async (path: string, representation: 'grid' | 'detail') => {
+        if (!path) return ''
+        if (path.startsWith('data:') || path.startsWith('http://') || path.startsWith('https://')) return path
+        if (this.imageMemoryCache.has(path)) return this.imageMemoryCache.get(path)!
+        try {
+          const data = await this.db.getImage(path)
+          if (data && data.startsWith('data:')) {
+            this.imageMemoryCache.set(path, data)
+            return data
+          }
+        } catch { /* not cached locally */ }
+        const key = representation === 'grid' ? item.gridImageKey : item.detailImageKey
+        if (key) return `${r2Base}/${key.split('/').map(encodeURIComponent).join('/')}`
+        return path
+      }
+      return { ...item, gridImage: await load(item.gridImage, 'grid'), detailImage: await load(item.detailImage, 'detail') }
+    }))
   }
-  const deduplicated=Array.from(byCode.values())
-  const r2Base=(import.meta.env.VITE_R2_PUBLIC_BASE_URL||'https://pub-ddd4389cc31a46b6b365e21911f96e1f.r2.dev').replace(/\/$/,'')
-  return Promise.all(deduplicated.map(async item=>{
-   const load=async(path:string,representation:'grid'|'detail')=>{
-    if(!path)return ''
-    if(path.startsWith('data:')||path.startsWith('http://')||path.startsWith('https://'))return path
-    if(this.imageMemoryCache.has(path))return this.imageMemoryCache.get(path)!
-    try{
-     const data=await this.db.getImage(path)
-     if(data&&data.startsWith('data:')){
-      this.imageMemoryCache.set(path,data)
-      return data
-     }
-    }catch{/* not cached locally */}
-    const key=representation==='grid'?item.gridImageKey:item.detailImageKey
-    if(key)return `${r2Base}/${key.split('/').map(encodeURIComponent).join('/')}`
-    return path
-   }
-   return {...item,gridImage:await load(item.gridImage,'grid'),detailImage:await load(item.detailImage,'detail')}
-  }))
- }
+  async products(): Promise<Product[]> {
+    const items = await this.values<Product>('product')
+    const byCode = new Map<string, Product>()
+    for (const item of items) {
+      const key = item.designCode.trim().toLowerCase()
+      const curr = byCode.get(key)
+      if (!curr) { byCode.set(key, item) }
+      else if (curr.syncState !== 'SYNCED' && item.syncState === 'SYNCED') { byCode.set(key, item) }
+    }
+    return this.resolveProductImages(Array.from(byCode.values()))
+  }
+  async archivedProducts(): Promise<Product[]> {
+    await this.ready
+    const x = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND deleted=1 ORDER BY updated_at DESC', ['product'])
+    const items = (x.rows || []).map(r => JSON.parse((r as { payload: string }).payload) as Product)
+    return this.resolveProductImages(items)
+  }
+  async archiveProduct(id: string): Promise<void> {
+    await this.ready
+    const res = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?', ['product', id])
+    const row = res.rows?.[0] as { payload: string } | undefined
+    if (row) {
+      const p = JSON.parse(row.payload) as Product
+      p.deleted = true
+      await this.db.execute('UPDATE local_entities SET payload=?, deleted=1, updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?', [JSON.stringify(p), 'product', id])
+      await this.db.queueOperation('product', 'ARCHIVE', { id })
+    }
+  }
+  async restoreProduct(id: string): Promise<void> {
+    await this.ready
+    const res = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?', ['product', id])
+    const row = res.rows?.[0] as { payload: string } | undefined
+    if (row) {
+      const p = JSON.parse(row.payload) as Product
+      p.deleted = false
+      if (!p.gridImageKey || !p.detailImageKey) {
+        p.syncState = 'PENDING_UPLOAD'
+      }
+      await this.db.execute('UPDATE local_entities SET payload=?, deleted=0, updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?', [JSON.stringify(p), 'product', id])
+      await this.db.queueOperation('product', 'RESTORE', { id })
+      if (!p.gridImageKey || !p.detailImageKey) {
+        await this.db.queueOperation('product', 'UPSERT', { id })
+      }
+    }
+  }
+  async updateProduct(product: Product): Promise<void> {
+    await this.ready
+    await this.persistProduct({ ...product, syncState: 'PENDING_UPLOAD' }, true)
+  }
  async hasLocalReplica(){await this.ready;const result=await this.db.execute("SELECT COUNT(*) count FROM local_entities WHERE entity_type='product' AND deleted=0");return Number((result.rows?.[0] as {count:number}|undefined)?.count||0)>0}
  async getImage(path:string):Promise<string|null>{if(!path)return null;if(path.startsWith('data:'))return path;if(this.imageMemoryCache.has(path))return this.imageMemoryCache.get(path)!;await this.ready;try{const data=await this.db.getImage(path);if(data&&data.startsWith('data:')){this.imageMemoryCache.set(path,data);return data}}catch{/* not in local storage */}return null}
  async saveImageData(path:string,dataUrl:string):Promise<void>{if(!path||!dataUrl)return;this.imageMemoryCache.set(path,dataUrl);await this.ready;try{await this.db.putImage(path,dataUrl)}catch{/* ignore */}}
