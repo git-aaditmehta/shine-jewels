@@ -92,5 +92,25 @@
 .admin-product-row-actions{display:flex;gap:8px;align-items:center;white-space:nowrap}
 @media(max-width:680px){.admin-product-row{flex-direction:column;align-items:stretch}.admin-product-row-actions{justify-content:flex-end}}
 
+/* Taxonomy Administration Cards & Subcategories */
+.admin-taxonomy-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;display:flex;flex-direction:column;gap:12px;transition:border-color var(--motion)}
+.admin-taxonomy-card:hover{border-color:var(--gold)}
+.admin-taxonomy-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.admin-taxonomy-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.admin-taxonomy-title strong{font-size:16px;font-weight:700;color:var(--ink)}
+.admin-taxonomy-actions{display:flex;align-items:center;gap:8px}
+.admin-taxonomy-sub-list{display:flex;flex-wrap:wrap;gap:8px;padding-top:8px;border-top:1px dashed var(--line)}
+.admin-taxonomy-sub-pill{display:inline-flex;align-items:center;gap:6px;background:var(--paper);border:1px solid var(--line);border-radius:20px;padding:4px 10px;font-size:12px;color:var(--ink)}
+.admin-taxonomy-sub-name{font-weight:600}
+.admin-taxonomy-sub-buttons{display:inline-flex;align-items:center;gap:2px;margin-left:4px}
+.admin-taxonomy-sub-buttons button{cursor:pointer;opacity:0.7;transition:opacity var(--motion)}
+.admin-taxonomy-sub-buttons button:hover{opacity:1}
 
-
+/* Vendor Administration Cards */
+.admin-vendor-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;display:flex;align-items:center;justify-content:space-between;gap:16px;transition:border-color var(--motion)}
+.admin-vendor-card:hover{border-color:var(--gold)}
+.admin-vendor-card-left{display:flex;flex-direction:column;gap:4px;min-width:0}
+.admin-vendor-card-left strong{font-size:16px;color:var(--ink)}
+.admin-vendor-card-left span{font-size:13px;color:var(--muted)}
+.admin-vendor-badge{display:inline-block;align-self:flex-start;font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:var(--gold-soft);color:var(--ink);letter-spacing:0.04em}
+@media(max-width:680px){.admin-vendor-card{flex-direction:column;align-items:stretch}}

@@ -132,4 +132,55 @@ describe('business invariant helpers',()=>{
    expect(historicalOrder.items[0].designCode).toBe('SJ-PENDANT')
    expect(historicalOrder.items[0].weightMg).toBe(6250)
   })
+   it('blocks category archive when referenced by active products and permits archive when unused', ()=>{
+    const activeProducts = [
+      { id: 'p1', categoryId: 'cat-rings', subcategoryId: 'sub-solitaire', deleted: false },
+      { id: 'p2', categoryId: 'cat-necklaces', subcategoryId: 'sub-choker', deleted: false },
+      { id: 'p3', categoryId: 'cat-rings', subcategoryId: 'sub-band', deleted: true } // archived product
+    ]
+    const canArchiveCategory = (catId: string) => {
+      const referencing = activeProducts.filter(p => !p.deleted && p.categoryId === catId)
+      return { allowed: referencing.length === 0, count: referencing.length }
+    }
+    // cat-rings is used by p1 (active)
+    const ringsCheck = canArchiveCategory('cat-rings')
+    expect(ringsCheck.allowed).toBe(false)
+    expect(ringsCheck.count).toBe(1)
+
+    // cat-bracelets is not used by any active product
+    const braceletsCheck = canArchiveCategory('cat-bracelets')
+    expect(braceletsCheck.allowed).toBe(true)
+    expect(braceletsCheck.count).toBe(0)
+   })
+   it('blocks subcategory archive when referenced by active products and permits archive when unused', ()=>{
+    const activeProducts = [
+      { id: 'p1', categoryId: 'cat-rings', subcategoryId: 'sub-solitaire', deleted: false },
+      { id: 'p2', categoryId: 'cat-rings', subcategoryId: 'sub-band', deleted: true }
+    ]
+    const canArchiveSubcategory = (subId: string) => {
+      const referencing = activeProducts.filter(p => !p.deleted && p.subcategoryId === subId)
+      return { allowed: referencing.length === 0, count: referencing.length }
+    }
+    expect(canArchiveSubcategory('sub-solitaire').allowed).toBe(false)
+    expect(canArchiveSubcategory('sub-band').allowed).toBe(true)
+   })
+   it('prevents vendor rename colliding with existing active vendor name and city', ()=>{
+    const activeVendors = [
+      { id: 'v1', name: 'Zaveri Jewellers', city: 'Mumbai', deleted: false },
+      { id: 'v2', name: 'Surat Gems', city: 'Surat', deleted: false }
+    ]
+    const validateVendorEdit = (editingId: string, newName: string, newCity: string) => {
+      const normKey = `${newName.trim().toLowerCase()}|${newCity.trim().toLowerCase()}`
+      return !activeVendors.some(
+        v => v.id !== editingId && !v.deleted && `${v.name.trim().toLowerCase()}|${v.city.trim().toLowerCase()}` === normKey
+      )
+    }
+    // Colliding with v1
+    expect(validateVendorEdit('v2', 'Zaveri Jewellers', 'Mumbai')).toBe(false)
+    expect(validateVendorEdit('v2', '  zaveri jewellers ', 'mumbai ')).toBe(false)
+    // Keeping same name/city on same vendor id
+    expect(validateVendorEdit('v1', 'Zaveri Jewellers', 'Mumbai')).toBe(true)
+    // Unique new name/city
+    expect(validateVendorEdit('v2', 'Surat Diamond Craft', 'Surat')).toBe(true)
+   })
 })

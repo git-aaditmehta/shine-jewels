@@ -173,6 +173,12 @@ export async function uploadProductOnline(token: string, productId: string): Pro
 export async function push(token: string, operation: Awaited<ReturnType<typeof storage.pendingOperations>>[number]) {
   const payload = JSON.parse(operation.payload) as Record<string, unknown>
   if (operation.entity_type === 'category') {
+    if (operation.operation === 'ARCHIVE') {
+      return workerApi(`/categories/${payload.id}/archive`, { method: 'POST', token })
+    }
+    if (operation.operation === 'RESTORE') {
+      return workerApi(`/categories/${payload.id}/restore`, { method: 'POST', token })
+    }
     const localCat = payload as unknown as Category
     const res = await workerApi<Category>('/categories', { method: 'POST', token, body: payload })
     if (res && res.id && res.id !== localCat.id) {
@@ -181,6 +187,12 @@ export async function push(token: string, operation: Awaited<ReturnType<typeof s
     return res
   }
   if (operation.entity_type === 'subcategory') {
+    if (operation.operation === 'ARCHIVE') {
+      return workerApi(`/subcategories/${payload.id}/archive`, { method: 'POST', token })
+    }
+    if (operation.operation === 'RESTORE') {
+      return workerApi(`/subcategories/${payload.id}/restore`, { method: 'POST', token })
+    }
     const localSub = payload as unknown as Subcategory
     const res = await workerApi<Subcategory>('/subcategories', { method: 'POST', token, body: payload })
     if (res && res.id && res.id !== localSub.id) {
@@ -189,6 +201,12 @@ export async function push(token: string, operation: Awaited<ReturnType<typeof s
     return res
   }
   if (operation.entity_type === 'vendor') {
+    if (operation.operation === 'ARCHIVE') {
+      return workerApi(`/vendors/${payload.id}/archive`, { method: 'POST', token })
+    }
+    if (operation.operation === 'RESTORE') {
+      return workerApi(`/vendors/${payload.id}/restore`, { method: 'POST', token })
+    }
     const localVendor = payload as unknown as Vendor
     const res = await workerApi<Vendor>('/vendors', { method: 'POST', token, body: payload })
     if (res && res.id && res.id !== localVendor.id) {

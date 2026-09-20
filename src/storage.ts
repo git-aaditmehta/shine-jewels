@@ -1,11 +1,60 @@
 import { LocalSqlite } from './local-sqlite'
 import type { Category, Order, Product, Session, Subcategory, Vendor } from './types'
 export type PendingOperation={id:string;idempotency_key:string;entity_type:string;operation:string;payload:string;retry_count:number}
-export interface CatalogueStorage { products():Promise<Product[]>;archivedProducts():Promise<Product[]>;archiveProduct(id:string):Promise<void>;restoreProduct(id:string):Promise<void>;updateProduct(x:Product):Promise<void>;hasLocalReplica():Promise<boolean>;saveProduct(x:Product,queue?:boolean):Promise<void>;getImage(path:string):Promise<string|null>;saveImageData(path:string,dataUrl:string):Promise<void>;hasImage(path:string):Promise<boolean>;deleteImage(path:string):Promise<void>;categories():Promise<Category[]>;saveCategory(x:Category):Promise<void>;subcategories():Promise<Subcategory[]>;saveSubcategory(x:Subcategory):Promise<void>;vendors():Promise<Vendor[]>;saveVendor(x:Vendor):Promise<void>;orders():Promise<Order[]>;saveOrder(x:Order):Promise<void>;session():Promise<Session|null>;saveSession(x:Session):Promise<void>;clearSession():Promise<void>;storageBytes():Promise<number>;syncCheckpoint():Promise<number>;setSyncCheckpoint(x:number):Promise<void>;pendingOperations():Promise<PendingOperation[]>;completeOperation(id:string,error?:string):Promise<void>;clearPendingOperations():Promise<void>;remapCategoryId(from:string,to:string):Promise<void>;remapSubcategoryId(from:string,to:string):Promise<void>;remapProductId(fromId:string,toId:string,updated:Product):Promise<void>;remapVendorId(fromId:string,toId:string,updated:Vendor):Promise<void>;applyRemoteChange(x:{entityType:string;entityId:string;operation:string;payload:unknown}):Promise<void>;cacheRemoteImage(productId:string,representation:'grid'|'detail',url:string,version:number,expectedChecksum?:string,expectedSize?:number):Promise<void> }
+export interface CatalogueStorage {
+  products(): Promise<Product[]>
+  archivedProducts(): Promise<Product[]>
+  archiveProduct(id: string): Promise<void>
+  restoreProduct(id: string): Promise<void>
+  updateProduct(x: Product): Promise<void>
+  hasLocalReplica(): Promise<boolean>
+  saveProduct(x: Product, queue?: boolean): Promise<void>
+  getImage(path: string): Promise<string | null>
+  saveImageData(path: string, dataUrl: string): Promise<void>
+  hasImage(path: string): Promise<boolean>
+  deleteImage(path: string): Promise<void>
+  categories(): Promise<Category[]>
+  archivedCategories(): Promise<Category[]>
+  canArchiveCategory(id: string): Promise<{ allowed: boolean; productCount: number }>
+  archiveCategory(id: string): Promise<{ ok: boolean; reason?: string }>
+  restoreCategory(id: string): Promise<void>
+  updateCategory(x: Category): Promise<void>
+  saveCategory(x: Category): Promise<void>
+  subcategories(): Promise<Subcategory[]>
+  archivedSubcategories(): Promise<Subcategory[]>
+  canArchiveSubcategory(id: string): Promise<{ allowed: boolean; productCount: number }>
+  archiveSubcategory(id: string): Promise<{ ok: boolean; reason?: string }>
+  restoreSubcategory(id: string): Promise<void>
+  updateSubcategory(x: Subcategory): Promise<void>
+  saveSubcategory(x: Subcategory): Promise<void>
+  vendors(): Promise<Vendor[]>
+  archivedVendors(): Promise<Vendor[]>
+  archiveVendor(id: string): Promise<void>
+  restoreVendor(id: string): Promise<void>
+  updateVendor(x: Vendor): Promise<void>
+  saveVendor(x: Vendor): Promise<void>
+  orders(): Promise<Order[]>
+  saveOrder(x: Order): Promise<void>
+  session(): Promise<Session | null>
+  saveSession(x: Session): Promise<void>
+  clearSession(): Promise<void>
+  storageBytes(): Promise<number>
+  syncCheckpoint(): Promise<number>
+  setSyncCheckpoint(x: number): Promise<void>
+  pendingOperations(): Promise<PendingOperation[]>
+  completeOperation(id: string, error?: string): Promise<void>
+  clearPendingOperations(): Promise<void>
+  remapCategoryId(from: string, to: string): Promise<void>
+  remapSubcategoryId(from: string, to: string): Promise<void>
+  remapProductId(fromId: string, toId: string, updated: Product): Promise<void>
+  remapVendorId(fromId: string, toId: string, updated: Vendor): Promise<void>
+  applyRemoteChange(x: { entityType: string; entityId: string; operation: string; payload: unknown }): Promise<void>
+  cacheRemoteImage(productId: string, representation: 'grid' | 'detail', url: string, version: number, expectedChecksum?: string, expectedSize?: number): Promise<void>
+}
 class SqliteOpfsStorage implements CatalogueStorage {
  private db=new LocalSqlite();private ready=this.bootstrap()
  private imageMemoryCache=new Map<string,string>()
- private async bootstrap(){if(!this.db.isAvailable())return;try{await this.db.execute('CREATE TABLE IF NOT EXISTS local_entities(entity_type TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(entity_type,id))');if(await this.db.checkpoint('storage_schema_version')!=='5'){await this.db.execute("DELETE FROM local_entities WHERE (entity_type='product' AND id IN ('p1','p2')) OR (entity_type='category' AND id='rings') OR (entity_type='subcategory' AND id='solitaire') OR (entity_type='vendor' AND id='v1')");await this.db.setCheckpoint('storage_schema_version','5')};await this.db.execute("DELETE FROM pending_operations WHERE state='ERROR'");const pending=await this.db.execute("SELECT id,entity_type,payload FROM pending_operations");for(const op of (pending.rows||[]) as {id:string;entity_type:string;payload:string}[]){if(op.entity_type==='product'){try{const parsed=JSON.parse(op.payload) as {id?:string};if(parsed?.id){const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=? AND deleted=0",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}}catch{await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}};const vRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='vendor' AND deleted=0");const seenV=new Set<string>();for(const r of (vRows.rows||[]) as {id:string;payload:string}[]){try{const v=JSON.parse(r.payload) as Vendor;const k=`${(v.name||'').trim().toLowerCase()}|${(v.city||'').trim().toLowerCase()}`;if(seenV.has(k)){await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id]);await this.db.execute("DELETE FROM pending_operations WHERE entity_type='vendor' AND id=?",[r.id])}else{seenV.add(k)}}catch{await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id])}}}catch{/* ignore in test runner */}}
+ private async bootstrap(){if(!this.db.isAvailable())return;try{await this.db.execute('CREATE TABLE IF NOT EXISTS local_entities(entity_type TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(entity_type,id))');if(await this.db.checkpoint('storage_schema_version')!=='5'){await this.db.execute("DELETE FROM local_entities WHERE (entity_type='product' AND id IN ('p1','p2')) OR (entity_type='category' AND id='rings') OR (entity_type='subcategory' AND id='solitaire') OR (entity_type='vendor' AND id='v1')");await this.db.setCheckpoint('storage_schema_version','5')};await this.db.execute("DELETE FROM pending_operations WHERE state='ERROR'");const pending=await this.db.execute("SELECT id,entity_type,operation,payload FROM pending_operations");for(const op of (pending.rows||[]) as {id:string;entity_type:string;operation:string;payload:string}[]){if(op.entity_type==='product'){try{const parsed=JSON.parse(op.payload) as {id?:string};if(parsed?.id){if(op.operation==='ARCHIVE'){const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=?",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}else{const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=? AND deleted=0",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}}}catch{await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}};const vRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='vendor' AND deleted=0");const seenV=new Set<string>();for(const r of (vRows.rows||[]) as {id:string;payload:string}[]){try{const v=JSON.parse(r.payload) as Vendor;const k=`${(v.name||'').trim().toLowerCase()}|${(v.city||'').trim().toLowerCase()}`;if(seenV.has(k)){await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id]);await this.db.execute("DELETE FROM pending_operations WHERE entity_type='vendor' AND id=?",[r.id])}else{seenV.add(k)}}catch{await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id])}}}catch{/* ignore in test runner */}}
  private async save(type:string,id:string,value:unknown){
   if(type==='product'){
    const prod=value as Product
@@ -139,19 +188,144 @@ class SqliteOpfsStorage implements CatalogueStorage {
  async saveImageData(path:string,dataUrl:string):Promise<void>{if(!path||!dataUrl)return;this.imageMemoryCache.set(path,dataUrl);await this.ready;try{await this.db.putImage(path,dataUrl)}catch{/* ignore */}}
  async hasImage(path:string){if(this.imageMemoryCache.has(path))return true;await this.ready;return this.db.hasImage(path)}
  async deleteImage(path:string){this.imageMemoryCache.delete(path);await this.ready;return this.db.deleteImage(path)}
- async categories(){return(await this.values<Category>('category')).filter(x=>x.active)} async subcategories(){return(await this.values<Subcategory>('subcategory')).filter(x=>x.active)}
- async vendors(){
-  const items=(await this.values<Vendor>('vendor')).filter(x=>!x.deleted);
-  const byNameCity=new Map<string,Vendor>();
-  for(const v of items){
-   if(!v.name||!v.city)continue;
-   const key=`${v.name.trim().toLowerCase()}|${v.city.trim().toLowerCase()}`;
-   if(!byNameCity.has(key)){
-    byNameCity.set(key,v);
-   }
+  async categories(): Promise<Category[]> {
+    return (await this.values<Category>('category')).filter(x => x.active)
   }
-  return Array.from(byNameCity.values());
- }
+  async archivedCategories(): Promise<Category[]> {
+    await this.ready
+    const x = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND deleted=1 ORDER BY updated_at DESC', ['category'])
+    return (x.rows || []).map(r => JSON.parse((r as { payload: string }).payload) as Category)
+  }
+  async canArchiveCategory(id: string): Promise<{ allowed: boolean; productCount: number }> {
+    await this.ready
+    const activeProds = await this.products()
+    const count = activeProds.filter(p => !p.deleted && p.categoryId === id).length
+    return { allowed: count === 0, productCount: count }
+  }
+  async archiveCategory(id: string): Promise<{ ok: boolean; reason?: string }> {
+    await this.ready
+    const check = await this.canArchiveCategory(id)
+    if (!check.allowed) {
+      return { ok: false, reason: `Cannot archive category: It is currently referenced by ${check.productCount} active design(s). Please reassign or archive those designs first.` }
+    }
+    const res = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?', ['category', id])
+    const row = res.rows?.[0] as { payload: string } | undefined
+    if (row) {
+      const c = JSON.parse(row.payload) as Category
+      c.active = false
+      await this.db.execute('UPDATE local_entities SET payload=?, deleted=1, updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?', [JSON.stringify(c), 'category', id])
+      await this.db.queueOperation('category', 'ARCHIVE', { id })
+    }
+    return { ok: true }
+  }
+  async restoreCategory(id: string): Promise<void> {
+    await this.ready
+    const res = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?', ['category', id])
+    const row = res.rows?.[0] as { payload: string } | undefined
+    if (row) {
+      const c = JSON.parse(row.payload) as Category
+      c.active = true
+      await this.db.execute('UPDATE local_entities SET payload=?, deleted=0, updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?', [JSON.stringify(c), 'category', id])
+      await this.db.queueOperation('category', 'RESTORE', { id })
+    }
+  }
+  async updateCategory(category: Category): Promise<void> {
+    await this.ready
+    await this.save('category', category.id, category)
+    await this.db.queueOperation('category', 'UPSERT', category)
+  }
+
+  async subcategories(): Promise<Subcategory[]> {
+    return (await this.values<Subcategory>('subcategory')).filter(x => x.active)
+  }
+  async archivedSubcategories(): Promise<Subcategory[]> {
+    await this.ready
+    const x = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND deleted=1 ORDER BY updated_at DESC', ['subcategory'])
+    return (x.rows || []).map(r => JSON.parse((r as { payload: string }).payload) as Subcategory)
+  }
+  async canArchiveSubcategory(id: string): Promise<{ allowed: boolean; productCount: number }> {
+    await this.ready
+    const activeProds = await this.products()
+    const count = activeProds.filter(p => !p.deleted && p.subcategoryId === id).length
+    return { allowed: count === 0, productCount: count }
+  }
+  async archiveSubcategory(id: string): Promise<{ ok: boolean; reason?: string }> {
+    await this.ready
+    const check = await this.canArchiveSubcategory(id)
+    if (!check.allowed) {
+      return { ok: false, reason: `Cannot archive subcategory: It is currently referenced by ${check.productCount} active design(s). Please reassign or archive those designs first.` }
+    }
+    const res = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?', ['subcategory', id])
+    const row = res.rows?.[0] as { payload: string } | undefined
+    if (row) {
+      const s = JSON.parse(row.payload) as Subcategory
+      s.active = false
+      await this.db.execute('UPDATE local_entities SET payload=?, deleted=1, updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?', [JSON.stringify(s), 'subcategory', id])
+      await this.db.queueOperation('subcategory', 'ARCHIVE', { id })
+    }
+    return { ok: true }
+  }
+  async restoreSubcategory(id: string): Promise<void> {
+    await this.ready
+    const res = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?', ['subcategory', id])
+    const row = res.rows?.[0] as { payload: string } | undefined
+    if (row) {
+      const s = JSON.parse(row.payload) as Subcategory
+      s.active = true
+      await this.db.execute('UPDATE local_entities SET payload=?, deleted=0, updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?', [JSON.stringify(s), 'subcategory', id])
+      await this.db.queueOperation('subcategory', 'RESTORE', { id })
+    }
+  }
+  async updateSubcategory(subcategory: Subcategory): Promise<void> {
+    await this.ready
+    await this.save('subcategory', subcategory.id, subcategory)
+    await this.db.queueOperation('subcategory', 'UPSERT', subcategory)
+  }
+
+  async vendors(): Promise<Vendor[]> {
+    const items = (await this.values<Vendor>('vendor')).filter(x => !x.deleted)
+    const byNameCity = new Map<string, Vendor>()
+    for (const v of items) {
+      if (!v.name || !v.city) continue
+      const key = `${v.name.trim().toLowerCase()}|${v.city.trim().toLowerCase()}`
+      if (!byNameCity.has(key)) {
+        byNameCity.set(key, v)
+      }
+    }
+    return Array.from(byNameCity.values())
+  }
+  async archivedVendors(): Promise<Vendor[]> {
+    await this.ready
+    const x = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND deleted=1 ORDER BY updated_at DESC', ['vendor'])
+    return (x.rows || []).map(r => JSON.parse((r as { payload: string }).payload) as Vendor)
+  }
+  async archiveVendor(id: string): Promise<void> {
+    await this.ready
+    const res = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?', ['vendor', id])
+    const row = res.rows?.[0] as { payload: string } | undefined
+    if (row) {
+      const v = JSON.parse(row.payload) as Vendor
+      v.deleted = true
+      await this.db.execute('UPDATE local_entities SET payload=?, deleted=1, updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?', [JSON.stringify(v), 'vendor', id])
+      await this.db.queueOperation('vendor', 'ARCHIVE', { id })
+    }
+  }
+  async restoreVendor(id: string): Promise<void> {
+    await this.ready
+    const res = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?', ['vendor', id])
+    const row = res.rows?.[0] as { payload: string } | undefined
+    if (row) {
+      const v = JSON.parse(row.payload) as Vendor
+      v.deleted = false
+      await this.db.execute('UPDATE local_entities SET payload=?, deleted=0, updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?', [JSON.stringify(v), 'vendor', id])
+      await this.db.queueOperation('vendor', 'RESTORE', { id })
+    }
+  }
+  async updateVendor(vendor: Vendor): Promise<void> {
+    await this.ready
+    await this.save('vendor', vendor.id, { ...vendor, deleted: false })
+    await this.db.queueOperation('vendor', 'UPSERT', vendor)
+  }
   async orders(): Promise<Order[]> {
     const raw = await this.values<Record<string, unknown>>('order')
     return raw.map(o => {
@@ -186,30 +360,42 @@ class SqliteOpfsStorage implements CatalogueStorage {
  async saveCategory(x:Category){await this.ready;await this.save('category',x.id,x);await this.db.queueOperation('category','UPSERT',x)} async saveSubcategory(x:Subcategory){await this.ready;await this.save('subcategory',x.id,x);await this.db.queueOperation('subcategory','UPSERT',x)} async saveVendor(x:Vendor){await this.ready;await this.save('vendor',x.id,x);await this.db.queueOperation('vendor','UPSERT',x)} async saveProduct(x:Product,queue=x.syncState!=='SYNCED'){await this.ready;await this.persistProduct(x,queue)} async saveOrder(x:Order){await this.ready;await this.save('order',x.id,x);await this.db.queueOperation('presentation','FINALIZE',x)}
  async saveSession(x:Session){await this.ready;await this.save('offline-authorization',x.userId,x);await this.db.setCheckpoint('offline_authorization_expires_at',x.offlineAuthorizationExpiresAt)} async clearSession(){await this.ready;await this.db.execute("UPDATE local_entities SET deleted=1,updated_at=CURRENT_TIMESTAMP WHERE entity_type='offline-authorization'")} async storageBytes(){await this.ready;const x=await this.db.execute('SELECT COALESCE(SUM(bytes),0) bytes FROM storage_accounting');return Number((x.rows?.[0] as {bytes:number}|undefined)?.bytes||0)}
  async syncCheckpoint(){await this.ready;return Number(await this.db.checkpoint('sync_checkpoint')||0)} async setSyncCheckpoint(x:number){await this.ready;await this.db.setCheckpoint('sync_checkpoint',String(x))}
- async pendingOperations(){
-  await this.ready;
-  const list=(await this.db.pendingOperations()) as PendingOperation[];
-  const valid:PendingOperation[]=[];
-  for(const op of list){
-   if(op.entity_type==='product'){
-    try{
-     const parsed=JSON.parse(op.payload) as {id?:string};
-     if(parsed?.id){
-      const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=? AND deleted=0",[parsed.id]);
-      if(!check.rows||check.rows.length===0){
-       await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id]);
-       continue;
+  async pendingOperations() {
+    await this.ready;
+    const list = (await this.db.pendingOperations()) as PendingOperation[];
+    const valid: PendingOperation[] = [];
+    for (const op of list) {
+      try {
+        const parsed = JSON.parse(op.payload) as { id?: string };
+        if (parsed?.id && ['product', 'vendor', 'category', 'subcategory'].includes(op.entity_type)) {
+          if (op.operation === 'ARCHIVE') {
+            const check = await this.db.execute('SELECT id FROM local_entities WHERE entity_type=? AND id=?', [op.entity_type, parsed.id]);
+            if (!check.rows || check.rows.length === 0) {
+              await this.db.execute('DELETE FROM pending_operations WHERE id=?', [op.id]);
+              continue;
+            }
+          } else if (op.operation === 'RESTORE') {
+            const check = await this.db.execute('SELECT id FROM local_entities WHERE entity_type=? AND id=?', [op.entity_type, parsed.id]);
+            if (!check.rows || check.rows.length === 0) {
+              await this.db.execute('DELETE FROM pending_operations WHERE id=?', [op.id]);
+              continue;
+            }
+          } else {
+            const check = await this.db.execute('SELECT id FROM local_entities WHERE entity_type=? AND id=? AND deleted=0', [op.entity_type, parsed.id]);
+            if (!check.rows || check.rows.length === 0) {
+              await this.db.execute('DELETE FROM pending_operations WHERE id=?', [op.id]);
+              continue;
+            }
+          }
+        }
+      } catch {
+        await this.db.execute('DELETE FROM pending_operations WHERE id=?', [op.id]);
+        continue;
       }
-     }
-    }catch{
-     await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id]);
-     continue;
+      valid.push(op);
     }
-   }
-   valid.push(op);
+    return valid;
   }
-  return valid;
- }
  async completeOperation(id:string,error?:string){await this.ready;await this.db.operationState(id,error?'ERROR':'SYNCED',error)}
  async clearPendingOperations(){await this.ready;await this.db.execute('DELETE FROM pending_operations')}
  async remapCategoryId(from:string,to:string){if(from===to)return;await this.ready;const category=(await this.values<Category>('category')).find(item=>item.id===from);if(category){await this.save('category',to,{...category,id:to});await this.db.execute('UPDATE local_entities SET deleted=1 WHERE entity_type=? AND id=?',['category',from])}for(const subcategory of await this.subcategories())if(subcategory.categoryId===from)await this.save('subcategory',subcategory.id,{...subcategory,categoryId:to});for(const product of await this.products())if(product.categoryId===from)await this.save('product',product.id,{...product,categoryId:to})}

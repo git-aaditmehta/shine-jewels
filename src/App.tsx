@@ -33,6 +33,7 @@ import { storage } from './storage'
 import type { Category, Order, Product, Session, Subcategory, Vendor } from './types'
 import { BatchEntry, ProductEntry, Taxonomy } from './Management'
 import { EditProductModal, ArchiveConfirmModal } from './ProductModals'
+import { EditVendorModal, ArchiveVendorModal } from './VendorModals'
 
 const grams=(mg:number)=>(mg/1000).toFixed(3)
 const uid=()=>crypto.randomUUID()
@@ -73,6 +74,8 @@ export function App(){
  const [products,setProducts]=useState<Product[]>([]),[categories,setCategories]=useState<Category[]>([]),[subcategories,setSubcategories]=useState<Subcategory[]>([]),[vendors,setVendors]=useState<Vendor[]>([]),[orders,setOrders]=useState<Order[]>([])
  const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number;remark:string}>>({}),[vendorId,setVendorId]=useState(''),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[pdfPreview,setPdfPreview]=useState<GeneratedPdfResult|null>(null),[generatingPdf,setGeneratingPdf]=useState(false),[bytes,setBytes]=useState(0),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<{id:string;device_id:string;device_name:string;last_seen_at:string;offline_authorization_expires_at:string;revoked_at:string|null}[]>([])
  const [editingProduct,setEditingProduct]=useState<Product|null>(null),[archivingProduct,setArchivingProduct]=useState<Product|null>(null),[archivedProductsList,setArchivedProductsList]=useState<Product[]>([]),[adminProductTab,setAdminProductTab]=useState<'active'|'add'|'archived'>('active'),[adminSearch,setAdminSearch]=useState('')
+ const [archivedVendorsList,setArchivedVendorsList]=useState<Vendor[]>([]),[archivedCategoriesList,setArchivedCategoriesList]=useState<Category[]>([]),[archivedSubcategoriesList,setArchivedSubcategoriesList]=useState<Subcategory[]>([])
+ const [editingVendor,setEditingVendor]=useState<Vendor|null>(null),[archivingVendor,setArchivingVendor]=useState<Vendor|null>(null),[adminVendorTab,setAdminVendorTab]=useState<'active'|'add'|'archived'>('active'),[vendorSearch,setVendorSearch]=useState('')
  const maxPossibleWeight = useMemo(()=>{const active=products.filter(p=>!p.deleted).map(p=>p.weightMg/1000);return active.length?Math.max(50,Math.ceil(Math.max(...active))):100},[products])
  const currentMinVal = minWeight !== '' ? Math.max(0, Math.round(Number(minWeight))) : 0
  const currentMaxVal = maxWeight !== '' ? Math.min(maxPossibleWeight, Math.round(Number(maxWeight))) : maxPossibleWeight
@@ -131,7 +134,7 @@ export function App(){
   window.addEventListener('keydown', handleKeyDown)
   return () => window.removeEventListener('keydown', handleKeyDown)
  }, [detail, activeIndex, activeList, hasPrev, hasNext])
- const load=async()=>{const [p,c,s,v,o,b,cp,pending,archived]=await Promise.all([storage.products(),storage.categories(),storage.subcategories(),storage.vendors(),storage.orders(),storage.storageBytes(),storage.syncCheckpoint(),storage.pendingOperations(),storage.archivedProducts()]);setProducts(p);setCategories(c);setSubcategories(s);setVendors(v);setOrders(o);setBytes(b);setSyncCheckpointVal(cp);setPendingCount(pending.length);setArchivedProductsList(archived)}
+ const load=async()=>{const [p,c,s,v,o,b,cp,pending,archivedP,archivedV,archivedC,archivedS]=await Promise.all([storage.products(),storage.categories(),storage.subcategories(),storage.vendors(),storage.orders(),storage.storageBytes(),storage.syncCheckpoint(),storage.pendingOperations(),storage.archivedProducts(),storage.archivedVendors(),storage.archivedCategories(),storage.archivedSubcategories()]);setProducts(p);setCategories(c);setSubcategories(s);setVendors(v);setOrders(o);setBytes(b);setSyncCheckpointVal(cp);setPendingCount(pending.length);setArchivedProductsList(archivedP);setArchivedVendorsList(archivedV);setArchivedCategoriesList(archivedC);setArchivedSubcategoriesList(archivedS)}
  const loadCloudStorage=async()=>{const saved=sessionStorage.getItem(sessionKey);if(!saved)return;try{setCloudBytes(await cloudImageStorageBytes((JSON.parse(saved) as {token:string}).token))}catch{setCloudBytes(null)}}
  const loadDevices=async()=>{const saved=sessionStorage.getItem(sessionKey);if(!saved)return;try{const list=await workerApi<{id:string;device_id:string;device_name:string;last_seen_at:string;offline_authorization_expires_at:string;revoked_at:string|null}[]>('/devices',{token:(JSON.parse(saved) as {token:string}).token});setDevices(list)}catch(err){setNotice(err instanceof Error?err.message:'Unable to load devices')}}
  const revokeDevice=async(deviceId:string)=>{const saved=sessionStorage.getItem(sessionKey);if(!saved)return;try{await workerApi(`/devices/${deviceId}/revoke`,{method:'POST',token:(JSON.parse(saved) as {token:string}).token});setNotice('Device session revoked. Device will be logged out upon reconnect.');await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Unable to revoke device session')}}
@@ -160,7 +163,7 @@ export function App(){
    let lastOp = '';
    try {
     while (navigator.onLine) {
-     const pending = (await storage.pendingOperations()).filter(op => op.entity_type === 'product');
+     const pending = (await storage.pendingOperations()).filter(op => ['product', 'vendor', 'category', 'subcategory'].includes(op.entity_type));
      if (pending.length === 0) break;
      const op = pending[0];
      lastOp = op.operation;
@@ -171,12 +174,13 @@ export function App(){
        uploaded++;
        await load();
        await loadCloudStorage();
+       const entityLabel = op.entity_type === 'product' ? 'Design' : op.entity_type.charAt(0).toUpperCase() + op.entity_type.slice(1);
        if (op.operation === 'RESTORE') {
-        setNotice('Design restored and synchronized with cloud catalogue.');
+        setNotice(`${entityLabel} restored and synchronized with cloud.`);
        } else if (op.operation === 'ARCHIVE') {
-        setNotice('Design archived and synchronized with cloud catalogue.');
+        setNotice(`${entityLabel} archived and synchronized with cloud.`);
        } else {
-        setNotice(`Cloud synchronization in progress: ${uploaded} design(s) updated…`);
+        setNotice(`${entityLabel} saved and synchronized with cloud.`);
        }
       }
      } catch (err) {
@@ -195,11 +199,11 @@ export function App(){
      setNotice(`Sync stopped: ${lastError}. Changes remain in local queue for retry.`);
     } else if (uploaded > 0) {
      if (lastOp === 'RESTORE') {
-      setNotice('Design successfully restored to active cloud catalogue.');
+      setNotice('Item successfully restored to active cloud catalogue.');
      } else if (lastOp === 'ARCHIVE') {
-      setNotice('Design successfully archived in cloud catalogue.');
+      setNotice('Item successfully archived in cloud catalogue.');
      } else {
-      setNotice(`Cloud synchronization completed: ${uploaded} design(s) successfully synchronized.`);
+      setNotice(`Cloud synchronization completed: ${uploaded} change(s) successfully synchronized.`);
      }
     }
    }
@@ -214,6 +218,7 @@ export function App(){
   try{
    await storage.saveProduct({...product,syncState:'PENDING_UPLOAD'},true);
    await load();
+   await loadCloudStorage();
 
    const saved=sessionStorage.getItem(sessionKey);
    const token=saved?(JSON.parse(saved) as {token:string}).token:'';
@@ -260,8 +265,110 @@ export function App(){
     if(navigator.onLine&&token){triggerBackgroundUpload()}
    }catch(err){setNotice(err instanceof Error?`Failed to restore design: ${err.message}`:'Failed to restore design.')}
   }
- const addCategory=async(c:Category)=>{await storage.saveCategory(c);await load()}
- const addSubcategory=async(s:Subcategory)=>{await storage.saveSubcategory(s);await load()}
+
+  const handleUpdateVendor = async (updated: Vendor) => {
+   try {
+     await storage.updateVendor(updated)
+     await load()
+     setNotice(`Vendor "${updated.name}" updated successfully.`)
+     triggerBackgroundUpload()
+   } catch (err) {
+     setNotice(err instanceof Error ? `Failed to update vendor: ${err.message}` : 'Failed to update vendor.')
+   }
+  }
+  const handleArchiveVendor = async (vendor: Vendor) => {
+   try {
+     await storage.archiveVendor(vendor.id)
+     await load()
+     setNotice(`Vendor "${vendor.name}" archived. You can restore it anytime in the Archived Vendors tab.`)
+     triggerBackgroundUpload()
+   } catch (err) {
+     setNotice(err instanceof Error ? `Failed to archive vendor: ${err.message}` : 'Failed to archive vendor.')
+   }
+  }
+  const handleRestoreVendor = async (id: string) => {
+   try {
+     await storage.restoreVendor(id)
+     await load()
+     setNotice('Vendor restored to active vendor directory.')
+     triggerBackgroundUpload()
+   } catch (err) {
+     setNotice(err instanceof Error ? `Failed to restore vendor: ${err.message}` : 'Failed to restore vendor.')
+   }
+  }
+
+  const handleUpdateCategory = async (updated: Category) => {
+   try {
+     await storage.updateCategory(updated)
+     await load()
+     setNotice(`Category "${updated.name}" updated successfully.`)
+     triggerBackgroundUpload()
+   } catch (err) {
+     setNotice(err instanceof Error ? `Failed to update category: ${err.message}` : 'Failed to update category.')
+   }
+  }
+  const handleArchiveCategory = async (id: string) => {
+   try {
+     const res = await storage.archiveCategory(id)
+     if (!res.ok) {
+       setNotice(res.reason || 'Cannot archive category.')
+       return
+     }
+     await load()
+     setNotice('Category archived successfully.')
+     triggerBackgroundUpload()
+   } catch (err) {
+     setNotice(err instanceof Error ? `Failed to archive category: ${err.message}` : 'Failed to archive category.')
+   }
+  }
+  const handleRestoreCategory = async (id: string) => {
+   try {
+     await storage.restoreCategory(id)
+     await load()
+     setNotice('Category restored to active taxonomy.')
+     triggerBackgroundUpload()
+   } catch (err) {
+     setNotice(err instanceof Error ? `Failed to restore category: ${err.message}` : 'Failed to restore category.')
+   }
+  }
+
+  const handleUpdateSubcategory = async (updated: Subcategory) => {
+   try {
+     await storage.updateSubcategory(updated)
+     await load()
+     setNotice(`Subcategory "${updated.name}" updated successfully.`)
+     triggerBackgroundUpload()
+   } catch (err) {
+     setNotice(err instanceof Error ? `Failed to update subcategory: ${err.message}` : 'Failed to update subcategory.')
+   }
+  }
+  const handleArchiveSubcategory = async (id: string) => {
+   try {
+     const res = await storage.archiveSubcategory(id)
+     if (!res.ok) {
+       setNotice(res.reason || 'Cannot archive subcategory.')
+       return
+     }
+     await load()
+     setNotice('Subcategory archived successfully.')
+     triggerBackgroundUpload()
+   } catch (err) {
+     setNotice(err instanceof Error ? `Failed to archive subcategory: ${err.message}` : 'Failed to archive subcategory.')
+   }
+  }
+  const handleRestoreSubcategory = async (id: string) => {
+   try {
+     await storage.restoreSubcategory(id)
+     await load()
+     setNotice('Subcategory restored to active taxonomy.')
+     triggerBackgroundUpload()
+   } catch (err) {
+     setNotice(err instanceof Error ? `Failed to restore subcategory: ${err.message}` : 'Failed to restore subcategory.')
+   }
+  }
+
+ const addCategory=async(c:Category)=>{await storage.saveCategory(c);await load();triggerBackgroundUpload()}
+ const addSubcategory=async(s:Subcategory)=>{await storage.saveSubcategory(s);await load();triggerBackgroundUpload()}
  const cart=products.filter(p=>selected[p.id]); const total=cart.reduce((n,p)=>n+p.weightMg*selected[p.id].quantity,0)
  if(!session)return <Login onSession={setSession}/>
  const commonViews:View[]=['catalogue','history','vendors','products','batch','taxonomy','storage']
@@ -273,7 +380,165 @@ export function App(){
   <main className="catalogue-layout" style={{display:view==='catalogue'?undefined:'none'}}><section className="catalogue"><div className="section-title"><div><p className="eyebrow">design library</p><h1>Find the right piece, without waiting.</h1></div><span>{filtered.length} designs</span></div><div className="filters"><label>Search design code<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="e.g. SJ-1001" /></label><label>Category<select value={category} onChange={e=>{setCategory(e.target.value);setSubcategory('')}}><option value="">All categories</option>{categories.map(c=><option value={c.id} key={c.id}>{c.name}</option>)}</select></label><label>Subcategory<select value={subcategory} onChange={e=>setSubcategory(e.target.value)}><option value="">All subcategories</option>{subcategories.filter(s=>!category||s.categoryId===category).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label><button className="quiet" onClick={clearFilters}>Clear filters</button></div>
   <div className="weight-filter-bar"><div className="weight-slider-group"><div className="weight-slider-header"><span>Weight Range Slider</span><span>{currentMinVal} g &mdash; {currentMaxVal} g</span></div><div className="dual-slider-track-box"><div className="dual-slider-rail" /><div className="dual-slider-fill" style={{left:`${leftPercent}%`,width:`${widthPercent}%`}} /><input aria-label="Minimum weight slider" className="dual-slider-thumb" type="range" min={0} max={maxPossibleWeight} step={1} value={currentMinVal} onPointerDown={()=>setSliderActive('min')} onChange={onSliderMinChange} style={{zIndex:sliderActive==='min'?5:(currentMinVal>maxPossibleWeight-5?5:3)}} /><input aria-label="Maximum weight slider" className="dual-slider-thumb" type="range" min={0} max={maxPossibleWeight} step={1} value={currentMaxVal} onPointerDown={()=>setSliderActive('max')} onChange={onSliderMaxChange} style={{zIndex:sliderActive==='max'?5:4}} /></div></div><div className="weight-presets" role="group" aria-label="Quick weight presets"><button type="button" className={`weight-preset-btn ${!minWeight&&!maxWeight?'active':''}`} onClick={()=>applyWeightPreset('','')}>All</button><button type="button" className={`weight-preset-btn ${minWeight===''&&maxWeight==='5'?'active':''}`} onClick={()=>applyWeightPreset('','5')}>&lt; 5g</button><button type="button" className={`weight-preset-btn ${minWeight==='5'&&maxWeight==='15'?'active':''}`} onClick={()=>applyWeightPreset('5','15')}>5&ndash;15g</button><button type="button" className={`weight-preset-btn ${minWeight==='15'&&maxWeight==='30'?'active':''}`} onClick={()=>applyWeightPreset('15','30')}>15&ndash;30g</button><button type="button" className={`weight-preset-btn ${minWeight==='30'&&maxWeight===''?'active':''}`} onClick={()=>applyWeightPreset('30','')}>30g+</button></div><div className="weight-inputs"><label>Min (g)<input type="number" step="0.001" min="0" placeholder="0.000" value={minWeight} onChange={e=>setMinWeight(e.target.value)} /></label><span>to</span><label>Max (g)<input type="number" step="0.001" min="0" placeholder="Max" value={maxWeight} onChange={e=>setMaxWeight(e.target.value)} /></label></div></div>
   <div className="grid">{filtered.map(product=><article className={'product '+(selected[product.id]?'chosen':'')} key={product.id}><button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><img src={product.gridImage} alt={`${product.designCode} jewelry design`} loading="eager" decoding="async" /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div><button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button></div></article>)}</div></section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label><div className="line"/>{cart.length===0?<p className="muted">Select designs from the catalogue. Your work stays on this device when offline.</p>:<div className="cart">{cart.map(p=><div className="cart-item" key={p.id}><img src={p.gridImage} alt="" /><div><strong>{p.designCode}</strong><span>{grams(p.weightMg)} g</span><label>Qty<input aria-label={`Quantity for ${p.designCode}`} type="number" min="1" step="1" value={selected[p.id].quantity} onChange={e=>change(p.id,'quantity',e.target.value)} /></label><input aria-label={`Remark for ${p.designCode}`} value={selected[p.id].remark} onChange={e=>change(p.id,'remark',e.target.value)} placeholder="Optional remark" /></div></div>)}</div>}<div className="total"><span>Total weight</span><strong>{grams(total)} g</strong></div><button className="primary" disabled={generatingPdf} onClick={()=>void makeOrder()}>{generatingPdf?'Generating PDF preview…':'Finalize & generate PDF'}</button><small>PDF is generated locally. Cloud sync follows when connected.</small></aside></main>
-  {view==='vendors'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">vendor directory</p><h1>Vendors for every order.</h1></div><span>{vendors.filter(v=>!v.deleted).length} vendors</span></div><div className="management"><form onSubmit={addVendor}><h2>Add vendor</h2><label>Name<input name="name" required /></label><label>Business address<input name="address" required /></label><label>City<input name="city" required /></label><label>Type<select name="type"><option>WHOLESALE</option><option>RETAIL</option><option>CORPORATE</option></select></label><button className="primary">Save vendor</button></form><div className="records">{vendors.map(v=><article key={v.id}><strong>{v.name}</strong><span>{v.address}, {v.city}</span><small>{v.type}</small></article>)}</div></div></main>}
+  {view==='vendors'&&(
+   <main className="single-view">
+    <div className="section-title">
+     <div>
+      <p className="eyebrow">vendor directory</p>
+      <h1>Vendors for every order.</h1>
+     </div>
+     <span>{vendors.filter(v=>!v.deleted).length} active · {archivedVendorsList.length} archived</span>
+    </div>
+
+    <div className="catalogue-admin-tabs">
+     <button
+      type="button"
+      className={`catalogue-admin-tab ${adminVendorTab==='active'?'active':''}`}
+      onClick={()=>setAdminVendorTab('active')}
+     >
+      Active Vendors <span className="admin-badge">{vendors.filter(v=>!v.deleted).length}</span>
+     </button>
+     <button
+      type="button"
+      className={`catalogue-admin-tab ${adminVendorTab==='add'?'active':''}`}
+      onClick={()=>setAdminVendorTab('add')}
+     >
+      + Add New Vendor
+     </button>
+     <button
+      type="button"
+      className={`catalogue-admin-tab ${adminVendorTab==='archived'?'active':''}`}
+      onClick={()=>setAdminVendorTab('archived')}
+     >
+      Archived Vendors <span className="admin-badge">{archivedVendorsList.length}</span>
+     </button>
+    </div>
+
+    {adminVendorTab==='add'&&(
+     <div className="management">
+      <form onSubmit={addVendor}>
+       <h2>Add Vendor</h2>
+       <p className="muted" style={{fontSize:'13px',margin:'0 0 var(--space-3)'}}>
+        Vendors represent manufacturers and wholesale partners for order generation.
+       </p>
+       <label>Name<input name="name" required placeholder="e.g. Surat Diamond Works" /></label>
+       <label>Business address<input name="address" required placeholder="e.g. 104 Ring Road" /></label>
+       <label>City<input name="city" required placeholder="e.g. Surat" /></label>
+       <label>Type
+        <select name="type">
+         <option>WHOLESALE</option>
+         <option>RETAIL</option>
+         <option>CORPORATE</option>
+        </select>
+       </label>
+       <button className="primary" style={{marginTop:'var(--space-2)'}}>Save Vendor</button>
+      </form>
+     </div>
+    )}
+
+    {adminVendorTab==='active'&&(
+     <div>
+      <div style={{marginBottom:'var(--space-4)'}}>
+       <input
+        type="search"
+        placeholder="Search active vendors by name or city..."
+        value={vendorSearch}
+        onChange={e=>setVendorSearch(e.target.value)}
+        style={{maxWidth:'360px'}}
+       />
+      </div>
+
+      <div style={{display:'flex',flexDirection:'column',gap:'var(--space-3)'}}>
+       {vendors
+        .filter(v=>!v.deleted&&(!vendorSearch||v.name.toLowerCase().includes(vendorSearch.toLowerCase().trim())||v.city.toLowerCase().includes(vendorSearch.toLowerCase().trim())))
+        .map(v=>(
+         <div key={v.id} className="admin-vendor-card">
+          <div className="admin-vendor-card-left">
+           <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}}>
+            <strong>{v.name}</strong>
+            <span className="admin-vendor-badge">{v.type || 'WHOLESALE'}</span>
+           </div>
+           <span>{v.address}, {v.city}</span>
+          </div>
+          <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+           <button
+            type="button"
+            className="quiet"
+            style={{minHeight:'36px',padding:'0 14px',fontSize:'12px'}}
+            onClick={()=>setEditingVendor(v)}
+           >
+            ✏️ Edit
+           </button>
+           <button
+            type="button"
+            className="quiet"
+            style={{minHeight:'36px',padding:'0 14px',fontSize:'12px',color:'var(--danger)',borderColor:'var(--danger)'}}
+            onClick={()=>setArchivingVendor(v)}
+           >
+            🗑️ Archive
+           </button>
+          </div>
+         </div>
+        ))}
+       {vendors.filter(v=>!v.deleted).length===0&&(
+        <p className="muted" style={{padding:'20px 0'}}>No active vendors yet. Add a vendor using the &quot;+ Add New Vendor&quot; tab.</p>
+       )}
+      </div>
+     </div>
+    )}
+
+    {adminVendorTab==='archived'&&(
+     <div>
+      <div style={{padding:'12px 16px',background:'var(--gold-soft)',borderRadius:'10px',marginBottom:'var(--space-4)',fontSize:'13px',color:'var(--ink)'}}>
+       ℹ️ Archived vendors are hidden from order creation trays, but historical orders, order summaries, and generated manufacturer PDFs retain all vendor details intact. You can restore them anytime.
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:'var(--space-3)'}}>
+       {archivedVendorsList.length===0?(
+        <p className="muted" style={{padding:'20px 0'}}>No archived vendors.</p>
+       ):(
+        archivedVendorsList.map(v=>(
+         <div key={v.id} className="admin-vendor-card" style={{opacity:0.9}}>
+          <div className="admin-vendor-card-left">
+           <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}}>
+            <strong>{v.name}</strong>
+            <span className="admin-vendor-badge">{v.type || 'WHOLESALE'}</span>
+            <small style={{color:'var(--danger)',fontSize:'11px'}}>Archived</small>
+           </div>
+           <span>{v.address}, {v.city}</span>
+          </div>
+          <button
+           type="button"
+           className="quiet"
+           style={{minHeight:'36px',padding:'0 14px',fontSize:'12px',fontWeight:700,color:'var(--green)',borderColor:'var(--green)'}}
+           onClick={()=>void handleRestoreVendor(v.id)}
+          >
+           🔄 Restore Vendor
+          </button>
+         </div>
+        ))
+       )}
+      </div>
+     </div>
+    )}
+
+    {editingVendor&&(
+     <EditVendorModal
+      vendor={editingVendor}
+      existingVendors={vendors}
+      onSave={handleUpdateVendor}
+      onClose={()=>setEditingVendor(null)}
+     />
+    )}
+
+    {archivingVendor&&(
+     <ArchiveVendorModal
+      vendor={archivingVendor}
+      onConfirm={()=>handleArchiveVendor(archivingVendor)}
+      onClose={()=>setArchivingVendor(null)}
+     />
+    )}
+   </main>
+  )}
   {view==='products'&&(
    <main className="single-view">
     <div className="section-title">
@@ -421,7 +686,26 @@ export function App(){
    </main>
   )}
   {view==='batch'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">queued image workflow</p><h1>Batch design entry</h1></div><span>{products.filter(p=>!p.deleted).length} designs</span></div><BatchEntry categories={categories} subcategories={subcategories} onProduct={stageProduct}/></main>}
- {view==='taxonomy'&&<main className="single-view"><Taxonomy categories={categories} subcategories={subcategories} onCategory={addCategory} onSubcategory={addSubcategory} notice={setNotice}/></main>}
+  {view==='taxonomy'&&(
+   <main className="single-view">
+    <Taxonomy
+     categories={categories}
+     subcategories={subcategories}
+     archivedCategoriesList={archivedCategoriesList}
+     archivedSubcategoriesList={archivedSubcategoriesList}
+     products={products}
+     onCategory={addCategory}
+     onSubcategory={addSubcategory}
+     onUpdateCategory={handleUpdateCategory}
+     onUpdateSubcategory={handleUpdateSubcategory}
+     onArchiveCategory={handleArchiveCategory}
+     onRestoreCategory={handleRestoreCategory}
+     onArchiveSubcategory={handleArchiveSubcategory}
+     onRestoreSubcategory={handleRestoreSubcategory}
+     notice={setNotice}
+    />
+   </main>
+  )}
   {view==='history'&&(
    <main className="single-view">
     <p className="eyebrow">synchronized history</p>
