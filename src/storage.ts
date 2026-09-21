@@ -50,10 +50,18 @@ export interface CatalogueStorage {
   remapVendorId(fromId: string, toId: string, updated: Vendor): Promise<void>
   applyRemoteChange(x: { entityType: string; entityId: string; operation: string; payload: unknown }): Promise<void>
   cacheRemoteImage(productId: string, representation: 'grid' | 'detail', url: string, version: number, expectedChecksum?: string, expectedSize?: number): Promise<void>
+  resolveDetailImage(product: Product): Promise<string>
 }
 class SqliteOpfsStorage implements CatalogueStorage {
  private db=new LocalSqlite();private ready=this.bootstrap()
  private imageMemoryCache=new Map<string,string>()
+ private cacheImageInMemory(path:string,data:string){
+   if(this.imageMemoryCache.size>=250){
+     const oldest=this.imageMemoryCache.keys().next().value
+     if(oldest)this.imageMemoryCache.delete(oldest)
+   }
+   this.imageMemoryCache.set(path,data)
+ }
  private async bootstrap(){if(!this.db.isAvailable())return;try{await this.db.execute('CREATE TABLE IF NOT EXISTS local_entities(entity_type TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(entity_type,id))');if(await this.db.checkpoint('storage_schema_version')!=='5'){await this.db.execute("DELETE FROM local_entities WHERE (entity_type='product' AND id IN ('p1','p2')) OR (entity_type='category' AND id='rings') OR (entity_type='subcategory' AND id='solitaire') OR (entity_type='vendor' AND id='v1')");await this.db.setCheckpoint('storage_schema_version','5')};await this.db.execute("DELETE FROM pending_operations WHERE state='ERROR'");const pending=await this.db.execute("SELECT id,entity_type,operation,payload FROM pending_operations");for(const op of (pending.rows||[]) as {id:string;entity_type:string;operation:string;payload:string}[]){if(op.entity_type==='product'){try{const parsed=JSON.parse(op.payload) as {id?:string};if(parsed?.id){if(op.operation==='ARCHIVE'){const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=?",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}else{const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=? AND deleted=0",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}}}catch{await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}};const vRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='vendor' AND deleted=0");const seenV=new Set<string>();for(const r of (vRows.rows||[]) as {id:string;payload:string}[]){try{const v=JSON.parse(r.payload) as Vendor;const k=`${(v.name||'').trim().toLowerCase()}|${(v.city||'').trim().toLowerCase()}`;if(seenV.has(k)){await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id]);await this.db.execute("DELETE FROM pending_operations WHERE entity_type='vendor' AND id=?",[r.id])}else{seenV.add(k)}}catch{await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id])}}}catch{/* ignore in test runner */}}
  private async save(type:string,id:string,value:unknown){
   if(type==='product'){
@@ -99,12 +107,12 @@ class SqliteOpfsStorage implements CatalogueStorage {
   let gridImage=x.gridImage,detailImage=x.detailImage;
   const grid=`${x.id}-grid-v${x.imageVersion}`,detail=`${x.id}-detail-v${x.imageVersion}`;
   if(x.gridImage.startsWith('data:')){
-   this.imageMemoryCache.set(grid,x.gridImage);
+   this.cacheImageInMemory(grid,x.gridImage);
    await this.db.putImage(grid,x.gridImage);
    gridImage=grid;
   }
   if(x.detailImage.startsWith('data:')){
-   this.imageMemoryCache.set(detail,x.detailImage);
+   this.cacheImageInMemory(detail,x.detailImage);
    await this.db.putImage(detail,x.detailImage);
    detailImage=detail;
   }
@@ -113,25 +121,34 @@ class SqliteOpfsStorage implements CatalogueStorage {
    await this.db.queueOperation('product','UPSERT',{id:x.id});
   }
  }
-  private async resolveProductImages(items: Product[]): Promise<Product[]> {
-    const r2Base = (import.meta.env.VITE_R2_PUBLIC_BASE_URL || 'https://pub-ddd4389cc31a46b6b365e21911f96e1f.r2.dev').replace(/\/$/, '')
-    return Promise.all(items.map(async item => {
-      const load = async (path: string, representation: 'grid' | 'detail') => {
-        if (!path) return ''
-        if (path.startsWith('data:') || path.startsWith('http://') || path.startsWith('https://')) return path
-        if (this.imageMemoryCache.has(path)) return this.imageMemoryCache.get(path)!
-        try {
-          const data = await this.db.getImage(path)
-          if (data && data.startsWith('data:')) {
-            this.imageMemoryCache.set(path, data)
-            return data
-          }
-        } catch { /* not cached locally */ }
-        const key = representation === 'grid' ? item.gridImageKey : item.detailImageKey
-        if (key) return `${r2Base}/${key.split('/').map(encodeURIComponent).join('/')}`
-        return path
+  private async resolvePath(path: string, _representation: 'grid' | 'detail', key?: string): Promise<string> {
+    if (!path) return ''
+    if (path.startsWith('data:') || path.startsWith('http://') || path.startsWith('https://')) return path
+    if (this.imageMemoryCache.has(path)) {
+      const cached = this.imageMemoryCache.get(path)!
+      this.imageMemoryCache.delete(path)
+      this.imageMemoryCache.set(path, cached)
+      return cached
+    }
+    try {
+      const data = await this.db.getImage(path)
+      if (data && data.startsWith('data:')) {
+        this.cacheImageInMemory(path, data)
+        return data
       }
-      return { ...item, gridImage: await load(item.gridImage, 'grid'), detailImage: await load(item.detailImage, 'detail') }
+    } catch { /* not cached locally */ }
+    const r2Base = (import.meta.env.VITE_R2_PUBLIC_BASE_URL || 'https://pub-ddd4389cc31a46b6b365e21911f96e1f.r2.dev').replace(/\/$/, '')
+    if (key) return `${r2Base}/${key.split('/').map(encodeURIComponent).join('/')}`
+    return path
+  }
+  async resolveDetailImage(product: Product): Promise<string> {
+    const resolved = await this.resolvePath(product.detailImage, 'detail', product.detailImageKey)
+    return resolved || product.gridImage || ''
+  }
+  private async resolveProductImages(items: Product[]): Promise<Product[]> {
+    return Promise.all(items.map(async item => {
+      const grid = await this.resolvePath(item.gridImage, 'grid', item.gridImageKey)
+      return { ...item, gridImage: grid }
     }))
   }
   async products(): Promise<Product[]> {
@@ -184,8 +201,8 @@ class SqliteOpfsStorage implements CatalogueStorage {
     await this.persistProduct({ ...product, syncState: 'PENDING_UPLOAD' }, true)
   }
  async hasLocalReplica(){await this.ready;const result=await this.db.execute("SELECT COUNT(*) count FROM local_entities WHERE entity_type='product' AND deleted=0");return Number((result.rows?.[0] as {count:number}|undefined)?.count||0)>0}
- async getImage(path:string):Promise<string|null>{if(!path)return null;if(path.startsWith('data:'))return path;if(this.imageMemoryCache.has(path))return this.imageMemoryCache.get(path)!;await this.ready;try{const data=await this.db.getImage(path);if(data&&data.startsWith('data:')){this.imageMemoryCache.set(path,data);return data}}catch{/* not in local storage */}return null}
- async saveImageData(path:string,dataUrl:string):Promise<void>{if(!path||!dataUrl)return;this.imageMemoryCache.set(path,dataUrl);await this.ready;try{await this.db.putImage(path,dataUrl)}catch{/* ignore */}}
+ async getImage(path:string):Promise<string|null>{if(!path)return null;if(path.startsWith('data:'))return path;if(this.imageMemoryCache.has(path))return this.imageMemoryCache.get(path)!;await this.ready;try{const data=await this.db.getImage(path);if(data&&data.startsWith('data:')){this.cacheImageInMemory(path,data);return data}}catch{/* not in local storage */}return null}
+ async saveImageData(path:string,dataUrl:string):Promise<void>{if(!path||!dataUrl)return;this.cacheImageInMemory(path,dataUrl);await this.ready;try{await this.db.putImage(path,dataUrl)}catch{/* ignore */}}
  async hasImage(path:string){if(this.imageMemoryCache.has(path))return true;await this.ready;return this.db.hasImage(path)}
  async deleteImage(path:string){this.imageMemoryCache.delete(path);await this.ready;return this.db.deleteImage(path)}
   async categories(): Promise<Category[]> {
@@ -407,8 +424,8 @@ class SqliteOpfsStorage implements CatalogueStorage {
    await this.db.execute("DELETE FROM pending_operations WHERE entity_type='product' AND payload LIKE ?",[`%"id":"${fromId}"%`])
    const oldGrid=`${fromId}-grid-v${updated.imageVersion}`,newGrid=`${toId}-grid-v${updated.imageVersion}`
    const oldDetail=`${fromId}-detail-v${updated.imageVersion}`,newDetail=`${toId}-detail-v${updated.imageVersion}`
-   if(this.imageMemoryCache.has(oldGrid))this.imageMemoryCache.set(newGrid,this.imageMemoryCache.get(oldGrid)!)
-   if(this.imageMemoryCache.has(oldDetail))this.imageMemoryCache.set(newDetail,this.imageMemoryCache.get(oldDetail)!)
+   if(this.imageMemoryCache.has(oldGrid))this.cacheImageInMemory(newGrid,this.imageMemoryCache.get(oldGrid)!)
+   if(this.imageMemoryCache.has(oldDetail))this.cacheImageInMemory(newDetail,this.imageMemoryCache.get(oldDetail)!)
   }
   await this.persistProduct(updated,false)
  }
@@ -449,7 +466,7 @@ class SqliteOpfsStorage implements CatalogueStorage {
   for(let i=0;i<len;i+=8192){binary+=String.fromCharCode(...bytes.subarray(i,Math.min(i+8192,len)))}
   const data=`data:${contentType};base64,${btoa(binary)}`
   const path=`${productId}-${representation}-v${version}`
-  this.imageMemoryCache.set(path,data)
+  this.cacheImageInMemory(path,data)
   await this.db.putImage(path,data)
   await this.db.execute('INSERT INTO local_image_metadata(image_key,product_id,representation,size_bytes,checksum,image_version,local_path,integrity_state,updated_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(image_key) DO UPDATE SET size_bytes=excluded.size_bytes,checksum=excluded.checksum,local_path=excluded.local_path,integrity_state=excluded.integrity_state,updated_at=CURRENT_TIMESTAMP',[`${productId}/${representation}/v${version}`,productId,representation,buffer.byteLength,checksum,version,path,'VERIFIED'])
   const result=await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?',['product',productId])

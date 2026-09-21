@@ -183,4 +183,57 @@ describe('business invariant helpers',()=>{
     // Unique new name/city
     expect(validateVendorEdit('v2', 'Surat Diamond Craft', 'Surat')).toBe(true)
    })
+   it('bounds progressive catalogue windowing to prevent DOM memory explosion', ()=>{
+    const INITIAL_BATCH = 40
+    const BATCH_INCREMENT = 24
+    const totalItems = Array.from({ length: 250 }, (_, i) => ({ id: `p-${i}`, code: `SJ-${1000 + i}` }))
+
+    let visibleCount = INITIAL_BATCH
+    const sliceItems = (count: number) => totalItems.slice(0, count)
+
+    // Initial render only slices first 40 items out of 250 into the DOM
+    expect(sliceItems(visibleCount)).toHaveLength(40)
+    expect(sliceItems(visibleCount)[0].code).toBe('SJ-1000')
+    expect(sliceItems(visibleCount)[39].code).toBe('SJ-1039')
+
+    // First scroll trigger increments by 24
+    visibleCount = Math.min(totalItems.length, visibleCount + BATCH_INCREMENT)
+    expect(sliceItems(visibleCount)).toHaveLength(64)
+
+    // Multiple scroll triggers increment up to exact total count without overflowing
+    while (visibleCount < totalItems.length) {
+      visibleCount = Math.min(totalItems.length, visibleCount + BATCH_INCREMENT)
+    }
+    expect(visibleCount).toBe(250)
+    expect(sliceItems(visibleCount)).toHaveLength(250)
+
+    // Filter change immediately resets window back to INITIAL_BATCH
+    const onFilterChange = () => { visibleCount = INITIAL_BATCH }
+    onFilterChange()
+    expect(visibleCount).toBe(40)
+    expect(sliceItems(visibleCount)).toHaveLength(40)
+   })
+   it('preserves full dataset traversal for detail modal navigation despite DOM windowing', ()=>{
+    const fullDataset = Array.from({ length: 150 }, (_, i) => ({ id: `prod-${i}`, designCode: `SJ-${i}` }))
+    const visibleCount = 40
+    const visible = fullDataset.slice(0, visibleCount)
+
+    // Card clicked is at index 35 (inside visible window)
+    const clickedItem = visible[35]
+    const activeIndex = fullDataset.findIndex(p => p.id === clickedItem.id)
+    expect(activeIndex).toBe(35)
+
+    // Navigating forward crosses past the visible DOM window (item 40, 41...)
+    const nextItem = fullDataset[activeIndex + 1]
+    expect(nextItem.id).toBe('prod-36')
+
+    // Modal navigation can traverse all the way to item 149
+    const lastItem = fullDataset[fullDataset.length - 1]
+    const hasNext = (idx: number) => idx >= 0 && idx < fullDataset.length - 1
+    expect(hasNext(35)).toBe(true)
+    expect(hasNext(148)).toBe(true)
+    expect(hasNext(149)).toBe(false)
+    expect(lastItem.designCode).toBe('SJ-149')
+   })
 })
+

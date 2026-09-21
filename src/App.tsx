@@ -37,6 +37,8 @@ import { EditVendorModal, ArchiveVendorModal } from './VendorModals'
 
 const grams=(mg:number)=>(mg/1000).toFixed(3)
 const uid=()=>crypto.randomUUID()
+const INITIAL_BATCH_SIZE = 40
+const BATCH_INCREMENT = 24
 type View='catalogue'|'history'|'vendors'|'products'|'batch'|'taxonomy'|'storage'|'devices'
 const sessionKey='shine-jewels.session'
 const deviceKey='shine-jewels.device-id'
@@ -76,6 +78,9 @@ export function App(){
  const [editingProduct,setEditingProduct]=useState<Product|null>(null),[archivingProduct,setArchivingProduct]=useState<Product|null>(null),[archivedProductsList,setArchivedProductsList]=useState<Product[]>([]),[adminProductTab,setAdminProductTab]=useState<'active'|'add'|'archived'>('active'),[adminSearch,setAdminSearch]=useState('')
  const [archivedVendorsList,setArchivedVendorsList]=useState<Vendor[]>([]),[archivedCategoriesList,setArchivedCategoriesList]=useState<Category[]>([]),[archivedSubcategoriesList,setArchivedSubcategoriesList]=useState<Subcategory[]>([])
  const [editingVendor,setEditingVendor]=useState<Vendor|null>(null),[archivingVendor,setArchivingVendor]=useState<Vendor|null>(null),[adminVendorTab,setAdminVendorTab]=useState<'active'|'add'|'archived'>('active'),[vendorSearch,setVendorSearch]=useState('')
+ const [visibleCount,setVisibleCount]=useState<number>(INITIAL_BATCH_SIZE)
+ const sentinelRef=useRef<HTMLDivElement|null>(null)
+ const [resolvedDetailUrl,setResolvedDetailUrl]=useState<string>('')
  const maxPossibleWeight = useMemo(()=>{const active=products.filter(p=>!p.deleted).map(p=>p.weightMg/1000);return active.length?Math.max(50,Math.ceil(Math.max(...active))):100},[products])
  const currentMinVal = minWeight !== '' ? Math.max(0, Math.round(Number(minWeight))) : 0
  const currentMaxVal = maxWeight !== '' ? Math.min(maxPossibleWeight, Math.round(Number(maxWeight))) : maxPossibleWeight
@@ -91,6 +96,47 @@ export function App(){
   setMaxWeight(v >= maxPossibleWeight ? '' : String(v))
  }
  const filtered=useMemo(()=>{const minMg=minWeight!==''?Math.round(Number(minWeight)*1000):0,maxMg=maxWeight!==''?Math.round(Number(maxWeight)*1000):Infinity;return products.filter(p=>!p.deleted&&p.designCode.toLowerCase().includes(query.trim().toLowerCase())&&(!category||p.categoryId===category)&&(!subcategory||p.subcategoryId===subcategory)&&p.weightMg>=minMg&&p.weightMg<=maxMg)},[products,query,category,subcategory,minWeight,maxWeight])
+ useEffect(()=>{
+  setVisibleCount(INITIAL_BATCH_SIZE)
+ },[query,category,subcategory,minWeight,maxWeight])
+ const visibleProducts=useMemo(()=>filtered.slice(0,visibleCount),[filtered,visibleCount])
+ useEffect(()=>{
+  const sentinel=sentinelRef.current
+  if(!sentinel)return
+  const observer=new IntersectionObserver((entries)=>{
+   const first=entries[0]
+   if(first&&first.isIntersecting){
+    setVisibleCount(prev=>(prev<filtered.length?Math.min(filtered.length,prev+BATCH_INCREMENT):prev))
+   }
+  },{rootMargin:'600px 0px'})
+  observer.observe(sentinel)
+  return()=>observer.disconnect()
+ },[filtered.length])
+ useEffect(()=>{
+  if(detail){
+   const idx=filtered.findIndex(p=>p.id===detail.id)
+   if(idx>=visibleCount){
+    setVisibleCount(Math.min(filtered.length,idx+BATCH_INCREMENT))
+   }
+  }
+ },[detail,filtered,visibleCount])
+ useEffect(()=>{
+  if(!detail){
+   setResolvedDetailUrl('')
+   return
+  }
+  let active=true
+  const fallback=detail.detailImage?.startsWith('data:')||detail.detailImage?.startsWith('http')?detail.detailImage:detail.gridImage
+  setResolvedDetailUrl(fallback)
+  storage.resolveDetailImage(detail).then(url=>{
+   if(active&&url){
+    setResolvedDetailUrl(url)
+   }
+  }).catch(()=>{
+   if(active)setResolvedDetailUrl(detail.gridImage)
+  })
+  return()=>{active=false}
+ },[detail?.id,detail?.detailImage,detail?.gridImage])
  const clearFilters=()=>{setQuery('');setCategory('');setSubcategory('');setMinWeight('');setMaxWeight('')}
  const applyWeightPreset=(min:string,max:string)=>{setMinWeight(min);setMaxWeight(max)}
  const detailIndex = detail ? filtered.findIndex(p => p.id === detail.id) : -1
@@ -379,7 +425,7 @@ export function App(){
   {notice&&<div className="notice" role="status">{notice}<button onClick={()=>setNotice('')} aria-label="Dismiss message">×</button></div>}
   <main className="catalogue-layout" style={{display:view==='catalogue'?undefined:'none'}}><section className="catalogue"><div className="section-title"><div><p className="eyebrow">design library</p><h1>Find the right piece, without waiting.</h1></div><span>{filtered.length} designs</span></div><div className="filters"><label>Search design code<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="e.g. SJ-1001" /></label><label>Category<select value={category} onChange={e=>{setCategory(e.target.value);setSubcategory('')}}><option value="">All categories</option>{categories.map(c=><option value={c.id} key={c.id}>{c.name}</option>)}</select></label><label>Subcategory<select value={subcategory} onChange={e=>setSubcategory(e.target.value)}><option value="">All subcategories</option>{subcategories.filter(s=>!category||s.categoryId===category).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label><button className="quiet" onClick={clearFilters}>Clear filters</button></div>
   <div className="weight-filter-bar"><div className="weight-slider-group"><div className="weight-slider-header"><span>Weight Range Slider</span><span>{currentMinVal} g &mdash; {currentMaxVal} g</span></div><div className="dual-slider-track-box"><div className="dual-slider-rail" /><div className="dual-slider-fill" style={{left:`${leftPercent}%`,width:`${widthPercent}%`}} /><input aria-label="Minimum weight slider" className="dual-slider-thumb" type="range" min={0} max={maxPossibleWeight} step={1} value={currentMinVal} onPointerDown={()=>setSliderActive('min')} onChange={onSliderMinChange} style={{zIndex:sliderActive==='min'?5:(currentMinVal>maxPossibleWeight-5?5:3)}} /><input aria-label="Maximum weight slider" className="dual-slider-thumb" type="range" min={0} max={maxPossibleWeight} step={1} value={currentMaxVal} onPointerDown={()=>setSliderActive('max')} onChange={onSliderMaxChange} style={{zIndex:sliderActive==='max'?5:4}} /></div></div><div className="weight-presets" role="group" aria-label="Quick weight presets"><button type="button" className={`weight-preset-btn ${!minWeight&&!maxWeight?'active':''}`} onClick={()=>applyWeightPreset('','')}>All</button><button type="button" className={`weight-preset-btn ${minWeight===''&&maxWeight==='5'?'active':''}`} onClick={()=>applyWeightPreset('','5')}>&lt; 5g</button><button type="button" className={`weight-preset-btn ${minWeight==='5'&&maxWeight==='15'?'active':''}`} onClick={()=>applyWeightPreset('5','15')}>5&ndash;15g</button><button type="button" className={`weight-preset-btn ${minWeight==='15'&&maxWeight==='30'?'active':''}`} onClick={()=>applyWeightPreset('15','30')}>15&ndash;30g</button><button type="button" className={`weight-preset-btn ${minWeight==='30'&&maxWeight===''?'active':''}`} onClick={()=>applyWeightPreset('30','')}>30g+</button></div><div className="weight-inputs"><label>Min (g)<input type="number" step="0.001" min="0" placeholder="0.000" value={minWeight} onChange={e=>setMinWeight(e.target.value)} /></label><span>to</span><label>Max (g)<input type="number" step="0.001" min="0" placeholder="Max" value={maxWeight} onChange={e=>setMaxWeight(e.target.value)} /></label></div></div>
-  <div className="grid">{filtered.map(product=><article className={'product '+(selected[product.id]?'chosen':'')} key={product.id}><button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><img src={product.gridImage} alt={`${product.designCode} jewelry design`} loading="eager" decoding="async" /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div><button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button></div></article>)}</div></section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label><div className="line"/>{cart.length===0?<p className="muted">Select designs from the catalogue. Your work stays on this device when offline.</p>:<div className="cart">{cart.map(p=><div className="cart-item" key={p.id}><img src={p.gridImage} alt="" /><div><strong>{p.designCode}</strong><span>{grams(p.weightMg)} g</span><label>Qty<input aria-label={`Quantity for ${p.designCode}`} type="number" min="1" step="1" value={selected[p.id].quantity} onChange={e=>change(p.id,'quantity',e.target.value)} /></label><input aria-label={`Remark for ${p.designCode}`} value={selected[p.id].remark} onChange={e=>change(p.id,'remark',e.target.value)} placeholder="Optional remark" /></div></div>)}</div>}<div className="total"><span>Total weight</span><strong>{grams(total)} g</strong></div><button className="primary" disabled={generatingPdf} onClick={()=>void makeOrder()}>{generatingPdf?'Generating PDF preview…':'Finalize & generate PDF'}</button><small>PDF is generated locally. Cloud sync follows when connected.</small></aside></main>
+  <div className="grid">{visibleProducts.map(product=><article className={'product '+(selected[product.id]?'chosen':'')} key={product.id}><button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><img src={product.gridImage} alt={`${product.designCode} jewelry design`} loading="lazy" decoding="async" /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div><button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button></div></article>)}</div>{visibleCount<filtered.length&&<div ref={sentinelRef} style={{height:'1px',width:'100%',pointerEvents:'none',margin:0,padding:0}} aria-hidden="true"/>}</section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label><div className="line"/>{cart.length===0?<p className="muted">Select designs from the catalogue. Your work stays on this device when offline.</p>:<div className="cart">{cart.map(p=><div className="cart-item" key={p.id}><img src={p.gridImage} alt="" /><div><strong>{p.designCode}</strong><span>{grams(p.weightMg)} g</span><label>Qty<input aria-label={`Quantity for ${p.designCode}`} type="number" min="1" step="1" value={selected[p.id].quantity} onChange={e=>change(p.id,'quantity',e.target.value)} /></label><input aria-label={`Remark for ${p.designCode}`} value={selected[p.id].remark} onChange={e=>change(p.id,'remark',e.target.value)} placeholder="Optional remark" /></div></div>)}</div>}<div className="total"><span>Total weight</span><strong>{grams(total)} g</strong></div><button className="primary" disabled={generatingPdf} onClick={()=>void makeOrder()}>{generatingPdf?'Generating PDF preview…':'Finalize & generate PDF'}</button><small>PDF is generated locally. Cloud sync follows when connected.</small></aside></main>
   {view==='vendors'&&(
    <main className="single-view">
     <div className="section-title">
@@ -787,7 +833,7 @@ export function App(){
      </button>
      <img
       key={detail.id}
-      src={detail.detailImage}
+      src={resolvedDetailUrl || detail.gridImage}
       alt={`${detail.designCode} detailed jewelry view`}
       loading="eager"
      />
