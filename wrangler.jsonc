@@ -5,7 +5,7 @@
   "compatibility_date": "2026-09-16",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true, "head_sampling_rate": 1 },
-  "vars": { "ENVIRONMENT": "development", "CORS_ORIGIN": "http://localhost:5173", "R2_PUBLIC_BASE_URL": "https://pub-ddd4389cc31a46b6b365e21911f96e1f.r2.dev", "R2_S3_ENDPOINT": "https://9337c85a3749877073c678f76e9f0ce7.r2.cloudflarestorage.com" },
+    "vars": { "ENVIRONMENT": "production", "CORS_ORIGIN": "http://localhost:5173", "R2_PUBLIC_BASE_URL": "https://pub-ddd4389cc31a46b6b365e21911f96e1f.r2.dev", "R2_S3_ENDPOINT": "https://9337c85a3749877073c678f76e9f0ce7.r2.cloudflarestorage.com" },
   "d1_databases": [{ "binding": "DB", "database_name": "shine-jewels-production", "database_id": "cfb623d1-b781-4fa2-aae1-99ef7cf3a615", "migrations_dir": "migrations" }],
   "r2_buckets": [{ "binding": "IMAGES", "bucket_name": "shine-jewels-images" }]
 }
