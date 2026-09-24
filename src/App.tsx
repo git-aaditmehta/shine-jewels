@@ -30,7 +30,7 @@ import { login, workerApi } from './api'
 import { cloudImageStorageBytes, initialDownload, push, recoverMissingImages, synchronize, uploadPendingProductImages } from './sync'
 import { createOrderPdfBlob, downloadPdfBlob, sharePdfFile, type GeneratedPdfResult } from './pdf'
 import { storage } from './storage'
-import type { Category, Order, Product, Session, Subcategory, Vendor, VendorRepresentative } from './types'
+import type { Category, DeviceSession, Order, Product, Session, Subcategory, Vendor, VendorRepresentative } from './types'
 import { BatchEntry, ProductEntry, Taxonomy } from './Management'
 import { EditProductModal, ArchiveConfirmModal } from './ProductModals'
 import { EditVendorModal, ArchiveVendorModal } from './VendorModals'
@@ -73,12 +73,38 @@ function deviceId(){
  return value
 }
 
+function getDeviceName(): string {
+  const ua = navigator.userAgent
+  let os = 'Unknown Device'
+  if (/iPad/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) {
+    os = 'iPad'
+  } else if (/iPhone/i.test(ua)) {
+    os = 'iPhone'
+  } else if (/Android/i.test(ua)) {
+    os = /Mobile/i.test(ua) ? 'Android Phone' : 'Android Tablet'
+  } else if (/Win/i.test(ua)) {
+    os = 'Windows PC'
+  } else if (/Mac/i.test(ua)) {
+    os = 'Mac'
+  } else if (/Linux/i.test(ua)) {
+    os = 'Linux'
+  }
+
+  let browser = 'Browser'
+  if (/Edg/i.test(ua)) browser = 'Edge'
+  else if (/Chrome/i.test(ua)) browser = 'Chrome'
+  else if (/Safari/i.test(ua)) browser = 'Safari'
+  else if (/Firefox/i.test(ua)) browser = 'Firefox'
+
+  return `${os} (${browser})`
+}
+
 function Login({onSession}:{onSession:(session:Session)=>void}){
  const [organizationId,setOrganizationId]=useState('shine-jewels-demo'),[username,setUsername]=useState(''),[password,setPassword]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[progressMsg,setProgressMsg]=useState('')
  const submit=async(event:React.FormEvent<HTMLFormElement>)=>{
   event.preventDefault();setError('');setBusy(true);setProgressMsg('Signing in…')
   try{
-   const result=await login({organizationId,username,password,deviceId:deviceId(),deviceName:navigator.userAgent.includes('iPad')?'iPad browser':'Browser device'})
+   const result=await login({organizationId,username,password,deviceId:deviceId(),deviceName:getDeviceName()})
    const session:Session={userId:result.user.id,displayName:result.user.displayName||username,role:result.user.role,organizationId:result.user.organizationId,offlineAuthorizationExpiresAt:result.offlineAuthorizationExpiresAt}
    const sessionPayload = { ...session, token: result.token }
    localStorage.setItem(sessionKey, JSON.stringify(sessionPayload))
@@ -98,10 +124,10 @@ function Login({onSession}:{onSession:(session:Session)=>void}){
 export function App(){
  const [session,setSession]=useState<Session|null>(()=>getStoredSession())
  const [products,setProducts]=useState<Product[]>([]),[categories,setCategories]=useState<Category[]>([]),[subcategories,setSubcategories]=useState<Subcategory[]>([]),[vendors,setVendors]=useState<Vendor[]>([]),[orders,setOrders]=useState<Order[]>([])
- const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number|'';remark:string}>>({}),[vendorId,setVendorId]=useState(''),[vendorRepresentatives,setVendorRepresentatives]=useState<VendorRepresentative[]>([{name:'',phone:''}]),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[pdfPreview,setPdfPreview]=useState<GeneratedPdfResult|null>(null),[generatingPdf,setGeneratingPdf]=useState(false),[bytes,setBytes]=useState(0),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<{id:string;device_id:string;device_name:string;last_seen_at:string;offline_authorization_expires_at:string;revoked_at:string|null}[]>([])
+ const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number|'';remark:string}>>({}),[vendorId,setVendorId]=useState(''),[vendorRepresentatives,setVendorRepresentatives]=useState<VendorRepresentative[]>([{name:'',phone:''}]),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[pdfPreview,setPdfPreview]=useState<GeneratedPdfResult|null>(null),[generatingPdf,setGeneratingPdf]=useState(false),[bytes,setBytes]=useState(0),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<DeviceSession[]>([])
  const [editingProduct,setEditingProduct]=useState<Product|null>(null),[archivingProduct,setArchivingProduct]=useState<Product|null>(null),[archivedProductsList,setArchivedProductsList]=useState<Product[]>([]),[adminProductTab,setAdminProductTab]=useState<'active'|'add'|'archived'>('active'),[adminSearch,setAdminSearch]=useState('')
  const [archivedVendorsList,setArchivedVendorsList]=useState<Vendor[]>([]),[archivedCategoriesList,setArchivedCategoriesList]=useState<Category[]>([]),[archivedSubcategoriesList,setArchivedSubcategoriesList]=useState<Subcategory[]>([])
- const [editingVendor,setEditingVendor]=useState<Vendor|null>(null),[archivingVendor,setArchivingVendor]=useState<Vendor|null>(null),[adminVendorTab,setAdminVendorTab]=useState<'active'|'add'|'archived'>('active'),[vendorSearch,setVendorSearch]=useState('')
+ const [editingVendor,setEditingVendor]=useState<Vendor|null>(null),[archivingVendor,setArchivingVendor]=useState<Vendor|null>(null),[adminVendorTab,setAdminVendorTab]=useState<'active'|'add'|'archived'>('active'),[vendorSearch,setVendorSearch]=useState(''),[adminDeviceTab,setAdminDeviceTab]=useState<'active'|'all'>('active')
  const [visibleCount,setVisibleCount]=useState<number>(INITIAL_BATCH_SIZE)
  const sentinelRef=useRef<HTMLDivElement|null>(null)
  const [resolvedDetailUrl,setResolvedDetailUrl]=useState<string>('')
@@ -209,8 +235,9 @@ export function App(){
  }, [detail, activeIndex, activeList, hasPrev, hasNext])
   const load=async()=>{const [p,c,s,v,o,b,cp,pending,archivedP,archivedV,archivedC,archivedS]=await Promise.all([storage.products(),storage.categories(),storage.subcategories(),storage.vendors(),storage.orders(),storage.storageBytes(),storage.syncCheckpoint(),storage.pendingOperations(),storage.archivedProducts(),storage.archivedVendors(),storage.archivedCategories(),storage.archivedSubcategories()]);setProducts(p);setCategories(c);setSubcategories(s);setVendors(v);setOrders(o);setBytes(b);setSyncCheckpointVal(cp);setPendingCount(pending.length);setArchivedProductsList(archivedP);setArchivedVendorsList(archivedV);setArchivedCategoriesList(archivedC);setArchivedSubcategoriesList(archivedS);return p}
   const loadCloudStorage=async()=>{const token=getStoredToken();if(!token)return;try{setCloudBytes(await cloudImageStorageBytes(token))}catch{setCloudBytes(null)}}
-  const loadDevices=async()=>{const token=getStoredToken();if(!token)return;try{const list=await workerApi<{id:string;device_id:string;device_name:string;last_seen_at:string;offline_authorization_expires_at:string;revoked_at:string|null}[]>('/devices',{token});setDevices(list)}catch(err){setNotice(err instanceof Error?err.message:'Unable to load devices')}}
+  const loadDevices=async()=>{const token=getStoredToken();if(!token)return;try{const list=await workerApi<DeviceSession[]>('/devices',{token});setDevices(list)}catch(err){setNotice(err instanceof Error?err.message:'Unable to load devices')}}
   const revokeDevice=async(deviceId:string)=>{const token=getStoredToken();if(!token)return;try{await workerApi(`/devices/${deviceId}/revoke`,{method:'POST',token});setNotice('Device session revoked. Device will be logged out upon reconnect.');await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Unable to revoke device session')}}
+  const deleteDevice=async(deviceId:string)=>{const token=getStoredToken();if(!token)return;try{await workerApi(`/devices/${deviceId}`,{method:'DELETE',token});setNotice('Device session removed.');await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Unable to remove device session')}}
   const triggerSync=async()=>{const token=getStoredToken();if(!token||syncing||!navigator.onLine)return;setSyncing(true);try{const res=await synchronize(token,msg=>setNotice(msg));await load();await loadCloudStorage();setNotice(res.synced?`Sync complete: ${res.uploaded} uploaded, ${res.pulled} change(s) synced.`:'Device is offline.')}catch(err){setNotice(err instanceof Error?`Sync failed: ${err.message}`:'Sync failed.')}finally{setSyncing(false)}}
   const triggerImageRecovery=async()=>{const token=getStoredToken();if(!token||recovering||!navigator.onLine)return;setRecovering(true);try{const res=await recoverMissingImages(token,msg=>setNotice(msg));await load();setNotice(`Recovery complete: ${res.recovered} restored, ${res.failed} unavailable.`)}catch(err){setNotice(err instanceof Error?`Recovery failed: ${err.message}`:'Recovery failed.')}finally{setRecovering(false)}}
   const uploadImages=async()=>{const token=getStoredToken();if(!token||uploading)return;setUploading(true);try{const result=await uploadPendingProductImages(token);await load();await loadCloudStorage();setNotice(result.failed?`${result.uploaded} product image upload(s) completed; ${result.failed} remain queued.`:`${result.uploaded} product image upload(s) completed to R2.`)}catch(error){setNotice(error instanceof Error?`Image upload failed: ${error.message}`:'Image upload failed. Local images remain intact.')}finally{setUploading(false)}}
@@ -957,7 +984,126 @@ export function App(){
    </main>
   )}
  {view==='storage'&&<main className="single-view storage"><div className="section-title"><div><p className="eyebrow">device replica</p><h1>Storage &amp; synchronization</h1></div><span>Checkpoint #{syncCheckpointVal}</span></div><div className="storage-card"><strong>{cloudBytes===null?'—':(cloudBytes/(1024*1024)).toFixed(2)+' MB'}</strong><span>Cloud R2 catalogue images</span><p>Calculated from the authenticated organization’s confirmed grid/detail image metadata. This is the cloud catalogue total, not a browser cache estimate.</p><strong>{(bytes/(1024*1024)).toFixed(2)} MB</strong><span>This device’s OPFS image replica</span><p>Images saved while working offline are counted here separately and remain on this device until explicitly cleared.</p><div style={{display:'flex',gap:'10px',alignItems:'center',padding:'8px 0'}}><span>Offline queue:</span><strong>{pendingCount} operation(s) pending sync</strong>{pendingCount>0&&<button className="quiet" style={{minHeight:'28px',padding:'0 8px',fontSize:'12px'}} onClick={async()=>{await storage.clearPendingOperations();await load();setNotice('Pending operations queue cleared.')}}>Clear queue</button>}</div><button className="primary" disabled={syncing||!online} onClick={()=>void triggerSync()}>{syncing?'Synchronizing…':'Run Full Synchronization'}</button><button className="quiet" disabled={recovering||!online} onClick={()=>void triggerImageRecovery()}>{recovering?'Recovering images…':'Scan & Recover Missing Images'}</button><button className="quiet" disabled={uploading||!online} onClick={()=>void uploadImages()}>{uploading?'Uploading pending images…':'Upload pending product images'}</button><button className="quiet" onClick={()=>{void load();void loadCloudStorage()}}>Refresh storage estimate</button><button className="quiet" style={{marginTop:'4px'}} onClick={async()=>{if('caches' in window){const k=await caches.keys();await Promise.all(k.map(n=>caches.delete(n)))};if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()))};window.location.reload()}}>Force Reload &amp; Update App</button></div></main>}
- {view==='devices'&&session.role==='ADMIN'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">security &amp; administration</p><h1>Authorized Device Sessions</h1></div><span>{devices.length} registered</span></div><div className="records">{devices.map(d=><article key={d.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><div><strong>{d.device_name}</strong><span>Device ID: {d.device_id}</span><small>Last seen: {new Date(d.last_seen_at).toLocaleString()} · Expires: {new Date(d.offline_authorization_expires_at).toLocaleDateString()}</small>{d.revoked_at&&<span style={{color:'var(--danger)'}}>Revoked on {new Date(d.revoked_at).toLocaleString()}</span>}</div>{!d.revoked_at&&<button className="quiet" style={{color:'var(--danger)',borderColor:'var(--danger)'}} onClick={()=>void revokeDevice(d.id)}>Revoke access</button>}</article>)}</div></main>}
+ {view==='devices'&&session.role==='ADMIN'&&(
+  <main className="single-view">
+   <div className="section-title">
+    <div>
+     <p className="eyebrow">security &amp; administration</p>
+     <h1>Authorized Device Sessions</h1>
+    </div>
+    <span>
+     {devices.filter(d=>!d.revoked_at && new Date(d.offline_authorization_expires_at) > new Date()).length} active · {devices.length} total
+    </span>
+   </div>
+
+   <div className="catalogue-admin-tabs">
+    <button
+     type="button"
+     className={`catalogue-admin-tab ${adminDeviceTab==='active'?'active':''}`}
+     onClick={()=>setAdminDeviceTab('active')}
+    >
+     Active Devices <span className="admin-badge">{devices.filter(d=>!d.revoked_at && new Date(d.offline_authorization_expires_at) > new Date()).length}</span>
+    </button>
+    <button
+     type="button"
+     className={`catalogue-admin-tab ${adminDeviceTab==='all'?'active':''}`}
+     onClick={()=>setAdminDeviceTab('all')}
+    >
+     All Sessions <span className="admin-badge">{devices.length}</span>
+    </button>
+   </div>
+
+   <div className="admin-card-list">
+    {(() => {
+     const filteredDevices = adminDeviceTab === 'active'
+       ? devices.filter(d => !d.revoked_at && new Date(d.offline_authorization_expires_at) > new Date())
+       : devices
+
+     if (!filteredDevices.length) {
+       return (
+         <p className="muted" style={{ padding: '24px 0' }}>
+           {adminDeviceTab === 'active' ? 'No active device sessions found.' : 'No device sessions recorded yet.'}
+         </p>
+       )
+     }
+
+     return filteredDevices.map(d => {
+       const lastSeenMs = Date.now() - new Date(d.last_seen_at).getTime()
+       const isOnlineRecent = lastSeenMs < 24 * 60 * 60 * 1000
+       const isIdleRecent = lastSeenMs < 7 * 24 * 60 * 60 * 1000
+       const isExpired = new Date(d.offline_authorization_expires_at) <= new Date()
+
+       let statusClass = 'inactive'
+       let statusLabel = 'Inactive'
+
+       if (d.revoked_at) {
+         statusClass = 'revoked'
+         statusLabel = 'Revoked'
+       } else if (isExpired) {
+         statusClass = 'revoked'
+         statusLabel = 'Expired'
+       } else if (isOnlineRecent) {
+         statusClass = 'active'
+         statusLabel = 'Active Recently'
+       } else if (isIdleRecent) {
+         statusClass = 'idle'
+         statusLabel = 'Idle'
+       }
+
+       const accountDisplay = d.display_name || d.username || 'User'
+       const usernameDisplay = d.username ? `@${d.username}` : ''
+
+       return (
+         <div className={`device-card ${d.revoked_at ? 'revoked' : ''}`} key={d.id}>
+          <div className="device-card-left">
+           <div className="device-card-top">
+            <span className="device-card-name">📱 {d.device_name}</span>
+            <span className="device-card-user">
+             👤 {accountDisplay} {usernameDisplay && <small style={{ opacity: 0.8 }}>({usernameDisplay})</small>}
+            </span>
+            <span className={`device-status-badge ${statusClass}`}>
+             <i className="device-status-dot" /> {statusLabel}
+            </span>
+           </div>
+           <div className="device-card-meta">
+            <span>Device ID: <code style={{ fontSize: '11px' }}>{d.device_id.slice(0, 13)}…</code></span>
+            <span>Last seen: {new Date(d.last_seen_at).toLocaleString()}</span>
+            <span>Expires: {new Date(d.offline_authorization_expires_at).toLocaleDateString()}</span>
+            {d.revoked_at && (
+             <span style={{ color: 'var(--danger)', fontWeight: 700 }}>
+              Revoked on {new Date(d.revoked_at).toLocaleString()}
+             </span>
+            )}
+           </div>
+          </div>
+          <div className="device-card-actions">
+           {!d.revoked_at && !isExpired && (
+            <button
+             type="button"
+             className="quiet"
+             style={{ color: 'var(--danger)', borderColor: 'var(--danger)', fontSize: '12px', minHeight: '34px' }}
+             onClick={() => void revokeDevice(d.id)}
+            >
+             Revoke access
+            </button>
+           )}
+           <button
+            type="button"
+            className="quiet"
+            style={{ color: 'var(--muted)', fontSize: '12px', minHeight: '34px', padding: '0 8px' }}
+            title="Remove session record from database"
+            onClick={() => void deleteDevice(d.id)}
+           >
+            🗑️ Remove
+           </button>
+          </div>
+         </div>
+       )
+     })
+    })()}
+   </div>
+  </main>
+ )}
   {detail && (
    <div
     className="modal"

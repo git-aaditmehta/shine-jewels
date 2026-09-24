@@ -10,3 +10,4 @@ export interface OrderItem { productId: string; serialNumber: number; designCode
 export interface VendorRepresentative { name: string; phone: string }
 export interface Order { id: string; orderNumber?: number; vendor: Vendor; representatives?: VendorRepresentative[]; salesperson: string; status: 'DRAFT' | 'FINALIZED'; createdAt: string; generatedAt?: string; items: OrderItem[] }
 export interface Session { userId: string; displayName: string; role: Role; organizationId: string; offlineAuthorizationExpiresAt: string }
+export interface DeviceSession { id: string; user_id: string; device_id: string; device_name: string; last_seen_at: string; offline_authorization_expires_at: string; revoked_at: string | null; username?: string; display_name?: string; role?: Role }
