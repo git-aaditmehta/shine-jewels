@@ -1,5 +1,6 @@
 import type { Order, Product, Vendor } from './types'
 import { storage } from './storage'
+import { jsPDF } from 'jspdf'
 
 const grams = (mg: number) => (mg / 1000).toFixed(3)
 
@@ -180,7 +181,6 @@ function normalizeOrderForPdf(order: Order): Order {
 export async function createOrderPdfBlob(rawOrder: Order): Promise<GeneratedPdfResult> {
   const order = normalizeOrderForPdf(rawOrder)
   if (!order.orderNumber) throw new Error('An order number is required before PDF generation.')
-  const { jsPDF } = await import('jspdf')
 
   // Resolve all images concurrently before laying out PDF
   const localProducts = await storage.products().catch(() => [])
