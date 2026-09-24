@@ -48,6 +48,7 @@ export interface CatalogueStorage {
   remapSubcategoryId(from: string, to: string): Promise<void>
   remapProductId(fromId: string, toId: string, updated: Product): Promise<void>
   remapVendorId(fromId: string, toId: string, updated: Vendor): Promise<void>
+  remapOrderId(fromId: string, toId: string, updated: unknown): Promise<void>
   applyRemoteChange(x: { entityType: string; entityId: string; operation: string; payload: unknown }): Promise<void>
   cacheRemoteImage(productId: string, representation: 'grid' | 'detail', url: string, version: number, expectedChecksum?: string, expectedSize?: number): Promise<void>
   resolveDetailImage(product: Product): Promise<string>
@@ -62,7 +63,7 @@ class SqliteOpfsStorage implements CatalogueStorage {
    }
    this.imageMemoryCache.set(path,data)
  }
- private async bootstrap(){if(!this.db.isAvailable())return;try{await this.db.execute('CREATE TABLE IF NOT EXISTS local_entities(entity_type TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(entity_type,id))');if(await this.db.checkpoint('storage_schema_version')!=='5'){await this.db.execute("DELETE FROM local_entities WHERE (entity_type='product' AND id IN ('p1','p2')) OR (entity_type='category' AND id='rings') OR (entity_type='subcategory' AND id='solitaire') OR (entity_type='vendor' AND id='v1')");await this.db.setCheckpoint('storage_schema_version','5')};await this.db.execute("DELETE FROM pending_operations WHERE state='ERROR'");const pending=await this.db.execute("SELECT id,entity_type,operation,payload FROM pending_operations");for(const op of (pending.rows||[]) as {id:string;entity_type:string;operation:string;payload:string}[]){if(op.entity_type==='product'){try{const parsed=JSON.parse(op.payload) as {id?:string};if(parsed?.id){if(op.operation==='ARCHIVE'){const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=?",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}else{const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=? AND deleted=0",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}}}catch{await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}};const vRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='vendor' AND deleted=0");const seenV=new Set<string>();for(const r of (vRows.rows||[]) as {id:string;payload:string}[]){try{const v=JSON.parse(r.payload) as Vendor;const k=`${(v.name||'').trim().toLowerCase()}|${(v.city||'').trim().toLowerCase()}`;if(seenV.has(k)){await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id]);await this.db.execute("DELETE FROM pending_operations WHERE entity_type='vendor' AND id=?",[r.id])}else{seenV.add(k)}}catch{await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id])}}}catch{/* ignore in test runner */}}
+ private async bootstrap(){if(!this.db.isAvailable())return;try{await this.db.execute('CREATE TABLE IF NOT EXISTS local_entities(entity_type TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(entity_type,id))');if(await this.db.checkpoint('storage_schema_version')!=='5'){await this.db.execute("DELETE FROM local_entities WHERE (entity_type='product' AND id IN ('p1','p2')) OR (entity_type='category' AND id='rings') OR (entity_type='subcategory' AND id='solitaire') OR (entity_type='vendor' AND id='v1')");await this.db.setCheckpoint('storage_schema_version','5')};await this.db.execute("DELETE FROM pending_operations WHERE state='ERROR'");const pending=await this.db.execute("SELECT id,entity_type,operation,payload FROM pending_operations");for(const op of (pending.rows||[]) as {id:string;entity_type:string;operation:string;payload:string}[]){if(op.entity_type==='product'){try{const parsed=JSON.parse(op.payload) as {id?:string};if(parsed?.id){if(op.operation==='ARCHIVE'){const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=?",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}else{const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=? AND deleted=0",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}}}catch{await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}};const vRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='vendor' AND deleted=0");const seenV=new Set<string>();for(const r of (vRows.rows||[]) as {id:string;payload:string}[]){try{const v=JSON.parse(r.payload) as Vendor;const k=`${(v.name||'').trim().toLowerCase()}|${(v.address||'').trim().toLowerCase()}`;if(seenV.has(k)){await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id]);await this.db.execute("DELETE FROM pending_operations WHERE entity_type='vendor' AND id=?",[r.id])}else{seenV.add(k)}}catch{await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id])}};const oRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='order' AND deleted=0");const seenOrders=new Map<number,{id:string;hasItems:boolean}>();for(const r of (oRows.rows||[]) as {id:string;payload:string}[]){try{const o=JSON.parse(r.payload) as Order&{order_number?:number};const num=Number(o.orderNumber||o.order_number||0);const hasItems=Array.isArray(o.items)&&o.items.length>0;if(num>0){if(seenOrders.has(num)){const prev=seenOrders.get(num)!;if(hasItems&&!prev.hasItems){await this.db.execute("DELETE FROM local_entities WHERE entity_type='order' AND id=?",[prev.id]);seenOrders.set(num,{id:r.id,hasItems})}else{await this.db.execute("DELETE FROM local_entities WHERE entity_type='order' AND id=?",[r.id])}}else{seenOrders.set(num,{id:r.id,hasItems})}}}catch{/* ignore */}}}catch{/* ignore in test runner */}}
  private async save(type:string,id:string,value:unknown){
   if(type==='product'){
    const prod=value as Product
@@ -83,17 +84,37 @@ class SqliteOpfsStorage implements CatalogueStorage {
   }
   if(type==='vendor'){
    const v=value as Vendor
-   if(v.name&&v.city){
-    const normKey=`${v.name.trim().toLowerCase()}|${v.city.trim().toLowerCase()}`
+   if(v.name&&v.address){
+    const normKey=`${v.name.trim().toLowerCase()}|${v.address.trim().toLowerCase()}`
     const existingRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='vendor' AND deleted=0")
     for(const r of existingRows.rows||[]){
      const row=r as {id:string;payload:string}
      if(row.id!==id){
       try{
        const ev=JSON.parse(row.payload) as Vendor
-       if(ev.name&&ev.city&&`${ev.name.trim().toLowerCase()}|${ev.city.trim().toLowerCase()}`===normKey){
+       if(ev.name&&ev.address&&`${ev.name.trim().toLowerCase()}|${ev.address.trim().toLowerCase()}`===normKey){
         await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[row.id])
         await this.db.execute("DELETE FROM pending_operations WHERE entity_type='vendor' AND id=?",[row.id])
+       }
+      }catch{/* ignore */}
+     }
+    }
+   }
+  }
+  if(type==='order'){
+   const ord=value as Order
+   const ordNum=Number(ord.orderNumber||(ord as unknown as Record<string,unknown>).order_number||0)
+   if(ordNum>0){
+    const existingRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='order' AND deleted=0")
+    for(const r of existingRows.rows||[]){
+     const row=r as {id:string;payload:string}
+     if(row.id!==id){
+      try{
+       const existing=JSON.parse(row.payload) as Order
+       const existingNum=Number(existing.orderNumber||(existing as unknown as Record<string,unknown>).order_number||0)
+       if(existingNum===ordNum){
+        await this.db.execute("DELETE FROM local_entities WHERE entity_type='order' AND id=?",[row.id])
+        await this.db.execute("DELETE FROM pending_operations WHERE entity_type='presentation' AND (payload LIKE ? OR id=?)",[`%"id":"${row.id}"%`,row.id])
        }
       }catch{/* ignore */}
      }
@@ -121,33 +142,40 @@ class SqliteOpfsStorage implements CatalogueStorage {
    await this.db.queueOperation('product','UPSERT',{id:x.id});
   }
  }
-  private async resolvePath(path: string, _representation: 'grid' | 'detail', key?: string): Promise<string> {
-    if (!path) return ''
-    if (path.startsWith('data:') || path.startsWith('http://') || path.startsWith('https://')) return path
-    if (this.imageMemoryCache.has(path)) {
-      const cached = this.imageMemoryCache.get(path)!
-      this.imageMemoryCache.delete(path)
-      this.imageMemoryCache.set(path, cached)
-      return cached
+  private async resolvePath(path: string, representation: 'grid' | 'detail', key?: string, sizeBytes?: number): Promise<string> {
+    if (representation === 'detail' && sizeBytes !== undefined && sizeBytes > 0 && sizeBytes < 1000) {
+      key = undefined
     }
-    try {
-      const data = await this.db.getImage(path)
-      if (data && data.startsWith('data:')) {
-        this.cacheImageInMemory(path, data)
-        return data
+    if (path) {
+      if (path.startsWith('data:') || path.startsWith('http://') || path.startsWith('https://')) return path
+      if (this.imageMemoryCache.has(path)) {
+        const cached = this.imageMemoryCache.get(path)!
+        this.imageMemoryCache.delete(path)
+        this.imageMemoryCache.set(path, cached)
+        return cached
       }
-    } catch { /* not cached locally */ }
+      try {
+        const data = await this.db.getImage(path)
+        if (data && data.startsWith('data:')) {
+          this.cacheImageInMemory(path, data)
+          return data
+        }
+      } catch { /* not cached locally */ }
+    }
     const r2Base = (import.meta.env.VITE_R2_PUBLIC_BASE_URL || 'https://pub-ddd4389cc31a46b6b365e21911f96e1f.r2.dev').replace(/\/$/, '')
     if (key) return `${r2Base}/${key.split('/').map(encodeURIComponent).join('/')}`
-    return path
+    return ''
   }
   async resolveDetailImage(product: Product): Promise<string> {
-    const resolved = await this.resolvePath(product.detailImage, 'detail', product.detailImageKey)
-    return resolved || product.gridImage || ''
+    const resolved = await this.resolvePath(product.detailImage, 'detail', product.detailImageKey, product.detailImageSizeBytes)
+    if (resolved && (resolved.startsWith('data:') || resolved.startsWith('http://') || resolved.startsWith('https://'))) {
+      return resolved
+    }
+    return product.gridImage || ''
   }
   private async resolveProductImages(items: Product[]): Promise<Product[]> {
     return Promise.all(items.map(async item => {
-      const grid = await this.resolvePath(item.gridImage, 'grid', item.gridImageKey)
+      const grid = await this.resolvePath(item.gridImage, 'grid', item.gridImageKey, item.gridImageSizeBytes)
       return { ...item, gridImage: grid }
     }))
   }
@@ -301,15 +329,15 @@ class SqliteOpfsStorage implements CatalogueStorage {
 
   async vendors(): Promise<Vendor[]> {
     const items = (await this.values<Vendor>('vendor')).filter(x => !x.deleted)
-    const byNameCity = new Map<string, Vendor>()
+    const byNameAddress = new Map<string, Vendor>()
     for (const v of items) {
-      if (!v.name || !v.city) continue
-      const key = `${v.name.trim().toLowerCase()}|${v.city.trim().toLowerCase()}`
-      if (!byNameCity.has(key)) {
-        byNameCity.set(key, v)
+      if (!v.name || !v.address) continue
+      const key = `${v.name.trim().toLowerCase()}|${v.address.trim().toLowerCase()}`
+      if (!byNameAddress.has(key)) {
+        byNameAddress.set(key, v)
       }
     }
-    return Array.from(byNameCity.values())
+    return Array.from(byNameAddress.values())
   }
   async archivedVendors(): Promise<Vendor[]> {
     await this.ready
@@ -345,7 +373,7 @@ class SqliteOpfsStorage implements CatalogueStorage {
   }
   async orders(): Promise<Order[]> {
     const raw = await this.values<Record<string, unknown>>('order')
-    return raw.map(o => {
+    const mapped = raw.map(o => {
       const vRaw = (o.vendor as Record<string, unknown> | undefined) || {}
       const vendorName = String(vRaw.name || o.vendor_name_snapshot || o.vendorName || 'Unknown Vendor')
       const vendorAddress = String(vRaw.address || o.vendor_address_snapshot || o.vendorAddress || '')
@@ -355,7 +383,18 @@ class SqliteOpfsStorage implements CatalogueStorage {
       const vendor: Vendor = { id: vendorId, name: vendorName, address: vendorAddress, city: vendorCity, type: vendorType }
 
       const orderNumber = Number(o.orderNumber || o.order_number || 0)
-      const itemsList = Array.isArray(o.items) ? (o.items as Order['items']) : []
+      const rawItems = Array.isArray(o.items) ? (o.items as Record<string, unknown>[]) : []
+      const itemsList = rawItems.map(i => ({
+        productId: String(i.productId || i.product_id || ''),
+        serialNumber: Number(i.serialNumber || i.serial_number || 1),
+        designCode: String(i.designCode || i.design_code_snapshot || i.designCodeSnapshot || ''),
+        category: String(i.category || i.category_snapshot || i.categorySnapshot || ''),
+        subcategory: String(i.subcategory || i.subcategory_snapshot || i.subcategorySnapshot || ''),
+        weightMg: Number(i.weightMg || i.weight_mg_snapshot || i.weightMgSnapshot || 0),
+        quantity: Number(i.quantity || 1),
+        remark: String(i.remark || ''),
+        image: String(i.image || '')
+      }))
       const salesperson = String(o.salesperson || o.salesperson_id || 'Salesperson')
       const generatedAt = String(o.generatedAt || o.generated_at || o.createdAt || new Date().toISOString())
       const createdAt = String(o.createdAt || o.generatedAt || o.generated_at || new Date().toISOString())
@@ -372,6 +411,39 @@ class SqliteOpfsStorage implements CatalogueStorage {
         generatedAt
       } as Order
     })
+
+    const byId = new Map<string, Order>()
+    for (const ord of mapped) {
+      const existing = byId.get(ord.id)
+      if (!existing) {
+        byId.set(ord.id, ord)
+      } else if ((!existing.items || existing.items.length === 0) && ord.items && ord.items.length > 0) {
+        byId.set(ord.id, ord)
+      }
+    }
+
+    const byNumber = new Map<number, Order>()
+    const unnumbered: Order[] = []
+    for (const ord of byId.values()) {
+      if (ord.orderNumber && ord.orderNumber > 0) {
+        const existing = byNumber.get(ord.orderNumber)
+        if (!existing) {
+          byNumber.set(ord.orderNumber, ord)
+        } else {
+          const existingScore = (existing.items?.length || 0) * 10 + (existing.vendor?.name ? 1 : 0)
+          const newScore = (ord.items?.length || 0) * 10 + (ord.vendor?.name ? 1 : 0)
+          if (newScore > existingScore) {
+            byNumber.set(ord.orderNumber, ord)
+          }
+        }
+      } else {
+        unnumbered.push(ord)
+      }
+    }
+
+    const deduped = [...Array.from(byNumber.values()), ...unnumbered]
+    deduped.sort((a, b) => (b.orderNumber || 0) - (a.orderNumber || 0))
+    return deduped
   }
  async session(){return(await this.values<Session>('offline-authorization'))[0]||null}
  async saveCategory(x:Category){await this.ready;await this.save('category',x.id,x);await this.db.queueOperation('category','UPSERT',x)} async saveSubcategory(x:Subcategory){await this.ready;await this.save('subcategory',x.id,x);await this.db.queueOperation('subcategory','UPSERT',x)} async saveVendor(x:Vendor){await this.ready;await this.save('vendor',x.id,x);await this.db.queueOperation('vendor','UPSERT',x)} async saveProduct(x:Product,queue=x.syncState!=='SYNCED'){await this.ready;await this.persistProduct(x,queue)} async saveOrder(x:Order){await this.ready;await this.save('order',x.id,x);await this.db.queueOperation('presentation','FINALIZE',x)}
@@ -445,6 +517,13 @@ class SqliteOpfsStorage implements CatalogueStorage {
     }
    }catch{/* ignore */}
   }
+ }
+ async remapOrderId(fromId:string,toId:string,updated:unknown):Promise<void>{
+  if(fromId===toId)return;
+  await this.ready;
+  await this.db.execute("DELETE FROM local_entities WHERE entity_type='order' AND id=?",[fromId]);
+  await this.db.execute("DELETE FROM pending_operations WHERE entity_type='presentation' AND (payload LIKE ? OR id=?)",[`%"id":"${fromId}"%`,fromId]);
+  await this.save('order',toId,updated);
  }
  async applyRemoteChange(x:{entityType:string;entityId:string;operation:string;payload:unknown}){await this.ready;if(x.operation==='ARCHIVE'||x.operation==='DELETE'){await this.db.execute('UPDATE local_entities SET deleted=1,updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?',[x.entityType,x.entityId]);return}const type=x.entityType==='presentation'?'order':x.entityType;const payload=x.payload as Record<string,unknown>;await this.save(type,x.entityId,{...payload,id:x.entityId})}
  async cacheRemoteImage(productId:string,representation:'grid'|'detail',url:string,version:number,expectedChecksum?:string,expectedSize?:number){

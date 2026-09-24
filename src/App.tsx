@@ -43,6 +43,28 @@ type View='catalogue'|'history'|'vendors'|'products'|'batch'|'taxonomy'|'storage
 const sessionKey='shine-jewels.session'
 const deviceKey='shine-jewels.device-id'
 
+export function getStoredToken(): string {
+ try {
+  const raw = localStorage.getItem(sessionKey) || sessionStorage.getItem(sessionKey)
+  if (!raw) return ''
+  return (JSON.parse(raw) as { token?: string }).token || ''
+ } catch {
+  return ''
+ }
+}
+
+export function getStoredSession(): (Session & { token?: string }) | null {
+ try {
+  const raw = localStorage.getItem(sessionKey) || sessionStorage.getItem(sessionKey)
+  if (!raw) return null
+  const parsed = JSON.parse(raw) as Session & { token?: string }
+  if (parsed && parsed.userId && parsed.organizationId) return parsed
+  return null
+ } catch {
+  return null
+ }
+}
+
 function deviceId(){
  const saved=localStorage.getItem(deviceKey)
  if(saved)return saved
@@ -58,7 +80,9 @@ function Login({onSession}:{onSession:(session:Session)=>void}){
   try{
    const result=await login({organizationId,username,password,deviceId:deviceId(),deviceName:navigator.userAgent.includes('iPad')?'iPad browser':'Browser device'})
    const session:Session={userId:result.user.id,displayName:result.user.displayName||username,role:result.user.role,organizationId:result.user.organizationId,offlineAuthorizationExpiresAt:result.offlineAuthorizationExpiresAt}
-   sessionStorage.setItem(sessionKey,JSON.stringify({...session,token:result.token}))
+   const sessionPayload = { ...session, token: result.token }
+   localStorage.setItem(sessionKey, JSON.stringify(sessionPayload))
+   sessionStorage.setItem(sessionKey, JSON.stringify(sessionPayload))
    await storage.saveSession(session)
    if(!await storage.hasLocalReplica()){
     setProgressMsg('Downloading catalogue…')
@@ -72,7 +96,7 @@ function Login({onSession}:{onSession:(session:Session)=>void}){
 }
 
 export function App(){
- const [session,setSession]=useState<Session|null>(()=>{try{const value=sessionStorage.getItem(sessionKey);return value?JSON.parse(value) as Session:null}catch{return null}})
+ const [session,setSession]=useState<Session|null>(()=>getStoredSession())
  const [products,setProducts]=useState<Product[]>([]),[categories,setCategories]=useState<Category[]>([]),[subcategories,setSubcategories]=useState<Subcategory[]>([]),[vendors,setVendors]=useState<Vendor[]>([]),[orders,setOrders]=useState<Order[]>([])
  const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number;remark:string}>>({}),[vendorId,setVendorId]=useState(''),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[pdfPreview,setPdfPreview]=useState<GeneratedPdfResult|null>(null),[generatingPdf,setGeneratingPdf]=useState(false),[bytes,setBytes]=useState(0),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<{id:string;device_id:string;device_name:string;last_seen_at:string;offline_authorization_expires_at:string;revoked_at:string|null}[]>([])
  const [editingProduct,setEditingProduct]=useState<Product|null>(null),[archivingProduct,setArchivingProduct]=useState<Product|null>(null),[archivedProductsList,setArchivedProductsList]=useState<Product[]>([]),[adminProductTab,setAdminProductTab]=useState<'active'|'add'|'archived'>('active'),[adminSearch,setAdminSearch]=useState('')
@@ -126,7 +150,10 @@ export function App(){
    return
   }
   let active=true
-  const fallback=detail.detailImage?.startsWith('data:')||detail.detailImage?.startsWith('http')?detail.detailImage:detail.gridImage
+  const isCorruptDetail = detail.detailImageSizeBytes !== undefined && detail.detailImageSizeBytes > 0 && detail.detailImageSizeBytes < 1000
+  const fallback = (!isCorruptDetail && (detail.detailImage?.startsWith('data:') || detail.detailImage?.startsWith('http')))
+    ? detail.detailImage
+    : detail.gridImage
   setResolvedDetailUrl(fallback)
   storage.resolveDetailImage(detail).then(url=>{
    if(active&&url){
@@ -136,7 +163,7 @@ export function App(){
    if(active)setResolvedDetailUrl(detail.gridImage)
   })
   return()=>{active=false}
- },[detail?.id,detail?.detailImage,detail?.gridImage])
+ },[detail?.id,detail?.detailImage,detail?.gridImage,detail?.detailImageSizeBytes])
  const clearFilters=()=>{setQuery('');setCategory('');setSubcategory('');setMinWeight('');setMaxWeight('')}
  const applyWeightPreset=(min:string,max:string)=>{setMinWeight(min);setMaxWeight(max)}
  const detailIndex = detail ? filtered.findIndex(p => p.id === detail.id) : -1
@@ -180,25 +207,88 @@ export function App(){
   window.addEventListener('keydown', handleKeyDown)
   return () => window.removeEventListener('keydown', handleKeyDown)
  }, [detail, activeIndex, activeList, hasPrev, hasNext])
- const load=async()=>{const [p,c,s,v,o,b,cp,pending,archivedP,archivedV,archivedC,archivedS]=await Promise.all([storage.products(),storage.categories(),storage.subcategories(),storage.vendors(),storage.orders(),storage.storageBytes(),storage.syncCheckpoint(),storage.pendingOperations(),storage.archivedProducts(),storage.archivedVendors(),storage.archivedCategories(),storage.archivedSubcategories()]);setProducts(p);setCategories(c);setSubcategories(s);setVendors(v);setOrders(o);setBytes(b);setSyncCheckpointVal(cp);setPendingCount(pending.length);setArchivedProductsList(archivedP);setArchivedVendorsList(archivedV);setArchivedCategoriesList(archivedC);setArchivedSubcategoriesList(archivedS)}
- const loadCloudStorage=async()=>{const saved=sessionStorage.getItem(sessionKey);if(!saved)return;try{setCloudBytes(await cloudImageStorageBytes((JSON.parse(saved) as {token:string}).token))}catch{setCloudBytes(null)}}
- const loadDevices=async()=>{const saved=sessionStorage.getItem(sessionKey);if(!saved)return;try{const list=await workerApi<{id:string;device_id:string;device_name:string;last_seen_at:string;offline_authorization_expires_at:string;revoked_at:string|null}[]>('/devices',{token:(JSON.parse(saved) as {token:string}).token});setDevices(list)}catch(err){setNotice(err instanceof Error?err.message:'Unable to load devices')}}
- const revokeDevice=async(deviceId:string)=>{const saved=sessionStorage.getItem(sessionKey);if(!saved)return;try{await workerApi(`/devices/${deviceId}/revoke`,{method:'POST',token:(JSON.parse(saved) as {token:string}).token});setNotice('Device session revoked. Device will be logged out upon reconnect.');await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Unable to revoke device session')}}
- const triggerSync=async()=>{const saved=sessionStorage.getItem(sessionKey);if(!saved||syncing||!navigator.onLine)return;setSyncing(true);try{const token=(JSON.parse(saved) as {token:string}).token;const res=await synchronize(token,msg=>setNotice(msg));await load();await loadCloudStorage();setNotice(res.synced?`Sync complete: ${res.uploaded} uploaded, ${res.pulled} change(s) synced.`:'Device is offline.')}catch(err){setNotice(err instanceof Error?`Sync failed: ${err.message}`:'Sync failed.')}finally{setSyncing(false)}}
- const triggerImageRecovery=async()=>{const saved=sessionStorage.getItem(sessionKey);if(!saved||recovering||!navigator.onLine)return;setRecovering(true);try{const token=(JSON.parse(saved) as {token:string}).token;const res=await recoverMissingImages(token,msg=>setNotice(msg));await load();setNotice(`Recovery complete: ${res.recovered} restored, ${res.failed} unavailable.`)}catch(err){setNotice(err instanceof Error?`Recovery failed: ${err.message}`:'Recovery failed.')}finally{setRecovering(false)}}
- const uploadImages=async()=>{const saved=sessionStorage.getItem(sessionKey);if(!saved||uploading)return;setUploading(true);try{const result=await uploadPendingProductImages((JSON.parse(saved) as {token:string}).token);await load();await loadCloudStorage();setNotice(result.failed?`${result.uploaded} product image upload(s) completed; ${result.failed} remain queued.`:`${result.uploaded} product image upload(s) completed to R2.`)}catch(error){setNotice(error instanceof Error?`Image upload failed: ${error.message}`:'Image upload failed. Local images remain intact.')}finally{setUploading(false)}}
- useEffect(()=>{if(session){void load();void loadCloudStorage();if(session.role==='ADMIN')void loadDevices()}},[session])
- useEffect(()=>{const onOnline=()=>{setOnline(true);void triggerSync()};const onOffline=()=>{setOnline(false)};window.addEventListener('online',onOnline);window.addEventListener('offline',onOffline);return ()=>{window.removeEventListener('online',onOnline);window.removeEventListener('offline',onOffline)}},[session])
+  const load=async()=>{const [p,c,s,v,o,b,cp,pending,archivedP,archivedV,archivedC,archivedS]=await Promise.all([storage.products(),storage.categories(),storage.subcategories(),storage.vendors(),storage.orders(),storage.storageBytes(),storage.syncCheckpoint(),storage.pendingOperations(),storage.archivedProducts(),storage.archivedVendors(),storage.archivedCategories(),storage.archivedSubcategories()]);setProducts(p);setCategories(c);setSubcategories(s);setVendors(v);setOrders(o);setBytes(b);setSyncCheckpointVal(cp);setPendingCount(pending.length);setArchivedProductsList(archivedP);setArchivedVendorsList(archivedV);setArchivedCategoriesList(archivedC);setArchivedSubcategoriesList(archivedS);return p}
+  const loadCloudStorage=async()=>{const token=getStoredToken();if(!token)return;try{setCloudBytes(await cloudImageStorageBytes(token))}catch{setCloudBytes(null)}}
+  const loadDevices=async()=>{const token=getStoredToken();if(!token)return;try{const list=await workerApi<{id:string;device_id:string;device_name:string;last_seen_at:string;offline_authorization_expires_at:string;revoked_at:string|null}[]>('/devices',{token});setDevices(list)}catch(err){setNotice(err instanceof Error?err.message:'Unable to load devices')}}
+  const revokeDevice=async(deviceId:string)=>{const token=getStoredToken();if(!token)return;try{await workerApi(`/devices/${deviceId}/revoke`,{method:'POST',token});setNotice('Device session revoked. Device will be logged out upon reconnect.');await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Unable to revoke device session')}}
+  const triggerSync=async()=>{const token=getStoredToken();if(!token||syncing||!navigator.onLine)return;setSyncing(true);try{const res=await synchronize(token,msg=>setNotice(msg));await load();await loadCloudStorage();setNotice(res.synced?`Sync complete: ${res.uploaded} uploaded, ${res.pulled} change(s) synced.`:'Device is offline.')}catch(err){setNotice(err instanceof Error?`Sync failed: ${err.message}`:'Sync failed.')}finally{setSyncing(false)}}
+  const triggerImageRecovery=async()=>{const token=getStoredToken();if(!token||recovering||!navigator.onLine)return;setRecovering(true);try{const res=await recoverMissingImages(token,msg=>setNotice(msg));await load();setNotice(`Recovery complete: ${res.recovered} restored, ${res.failed} unavailable.`)}catch(err){setNotice(err instanceof Error?`Recovery failed: ${err.message}`:'Recovery failed.')}finally{setRecovering(false)}}
+  const uploadImages=async()=>{const token=getStoredToken();if(!token||uploading)return;setUploading(true);try{const result=await uploadPendingProductImages(token);await load();await loadCloudStorage();setNotice(result.failed?`${result.uploaded} product image upload(s) completed; ${result.failed} remain queued.`:`${result.uploaded} product image upload(s) completed to R2.`)}catch(error){setNotice(error instanceof Error?`Image upload failed: ${error.message}`:'Image upload failed. Local images remain intact.')}finally{setUploading(false)}}
+  useEffect(()=>{
+    if(!session)return;
+    let active=true;
+    const init=async()=>{
+      const p=await load();
+      void loadCloudStorage();
+      if(session.role==='ADMIN')void loadDevices();
+      const token=getStoredToken();
+      if(token&&navigator.onLine){
+        if(p.length===0){
+          setNotice('Synchronizing catalogue from cloud…');
+          try{
+            await initialDownload(token,msg=>{if(active)setNotice(msg)});
+            if(active){
+              await load();
+              await loadCloudStorage();
+              setNotice('Catalogue synchronized.');
+            }
+          }catch(err){
+            console.warn('Initial download error:',err);
+            if(active)setNotice(err instanceof Error?`Sync error: ${err.message}`:'Sync error.');
+          }
+        }else{
+          void triggerSync();
+        }
+      }
+    };
+    void init();
+    return ()=>{active=false};
+  },[session])
+  useEffect(()=>{const onOnline=()=>{setOnline(true);void triggerSync()};const onOffline=()=>{setOnline(false)};window.addEventListener('online',onOnline);window.addEventListener('offline',onOffline);return ()=>{window.removeEventListener('online',onOnline);window.removeEventListener('offline',onOffline)}},[session])
+  useEffect(()=>{if(view==='history'&&online){void triggerSync()}},[view,online])
  const toggle=(id:string)=>setSelected(x=>x[id]?Object.fromEntries(Object.entries(x).filter(([k])=>k!==id)):{...x,[id]:{quantity:1,remark:''}})
  const change=(id:string,key:'quantity'|'remark',value:string)=>setSelected(s=>({...s,[id]:{...s[id], [key]:key==='quantity'?Math.max(1,Number(value)||1):value}}))
  const makeOrder=async()=>{const vendor=vendors.find(v=>v.id===vendorId);const picks=products.filter(p=>selected[p.id]);if(!vendor){setNotice('Select a vendor before reviewing the order.');return}if(!picks.length){setNotice('Select at least one design.');return};const max=Math.max(0,...orders.map(o=>o.orderNumber||0));const order:Order={id:uid(),orderNumber:max+1,vendor,salesperson:session?.displayName||'Salesperson',status:'FINALIZED',createdAt:new Date().toISOString(),generatedAt:new Date().toISOString(),items:picks.map((p,index)=>({productId:p.id,serialNumber:index+1,designCode:p.designCode,category:categories.find(c=>c.id===p.categoryId)?.name||'',subcategory:subcategories.find(s=>s.id===p.subcategoryId)?.name||'',weightMg:p.weightMg,quantity:selected[p.id].quantity,remark:selected[p.id].remark,image:p.gridImage}))};await storage.saveOrder(order);setOrders(o=>[order,...o]);setSelected({});await load();setNotice(`Order #${order.orderNumber} finalized. Generating PDF preview…`);setGeneratingPdf(true);try{const res=await createOrderPdfBlob(order);setPdfPreview(res);setNotice(`Order #${order.orderNumber} PDF preview is ready.`)}catch(err){setNotice(err instanceof Error?`PDF generation failed: ${err.message}`:'PDF generation failed.')}finally{setGeneratingPdf(false)}}
   const openOrderPdfPreview=async(order:Order)=>{setGeneratingPdf(true);setNotice(`Generating PDF for Order #${order.orderNumber}…`);try{const res=await createOrderPdfBlob(order);setPdfPreview(res);setNotice(`Order #${order.orderNumber} PDF preview is ready.`)}catch(err){setNotice(err instanceof Error?`PDF generation failed: ${err.message}`:'PDF generation failed.')}finally{setGeneratingPdf(false)}}
- const addVendor=async(e:React.FormEvent<HTMLFormElement>)=>{e.preventDefault();const form=e.currentTarget;const fd=new FormData(form),name=String(fd.get('name')||'').trim(),city=String(fd.get('city')||'').trim(),address=String(fd.get('address')||'').trim(),type=String(fd.get('type')||'WHOLESALE') as Vendor['type'];if(!name||!city||!address){setNotice('Vendor name, business address and city are required.');return};if(vendors.some(v=>v.name.trim().toLowerCase()===name.toLowerCase()&&v.city.trim().toLowerCase()===city.toLowerCase())){setNotice('A vendor with this name and city already exists.');return};form.reset();const v={id:uid(),name,address,city,type};await storage.saveVendor(v);await load();setNotice('Vendor saved locally.')}
+ const addVendor=async(e:React.FormEvent<HTMLFormElement>)=>{
+  e.preventDefault();
+  const form=e.currentTarget;
+  const fd=new FormData(form),name=String(fd.get('name')||'').trim(),city=String(fd.get('city')||'').trim(),address=String(fd.get('address')||'').trim(),type=String(fd.get('type')||'WHOLESALE') as Vendor['type'];
+  if(!name||!city||!address){setNotice('Vendor name, business address and city are required.');return};
+  if(vendors.some(v=>v.name.trim().toLowerCase()===name.toLowerCase()&&v.address.trim().toLowerCase()===address.toLowerCase())){setNotice('A vendor with this name and address already exists.');return};
+  form.reset();
+  const v:Vendor={id:uid(),name,address,city,type};
+  await storage.saveVendor(v);
+  await load();
+
+  const token=getStoredToken();
+  const isOnline=navigator.onLine&&Boolean(token);
+  if(isOnline){
+    try{
+      const res=await workerApi<Vendor>('/vendors',{method:'POST',token,body:v});
+      if(res&&res.id&&res.id!==v.id){
+        await storage.remapVendorId(v.id,res.id,res);
+      }
+      const pending=(await storage.pendingOperations()).find(op=>op.entity_type==='vendor'&&((JSON.parse(op.payload||'{}') as {id?:string}).id===v.id));
+      if(pending){
+        await storage.completeOperation(pending.id);
+      }
+      await load();
+      setNotice(`Vendor "${v.name}" saved locally and synced to cloud.`);
+      return;
+    }catch(err){
+      console.warn('Direct vendor cloud push error, fallback to background sync:',err);
+      triggerBackgroundUpload();
+      setNotice(`Vendor "${v.name}" saved locally. Cloud sync pending.`);
+      return;
+    }
+  }
+  setNotice(`Vendor "${v.name}" saved locally (offline). It will sync automatically when online.`);
+ }
  const uploadingRef = useRef(false)
  const triggerBackgroundUpload = () => {
-  const saved = sessionStorage.getItem(sessionKey);
-  if (!saved || !navigator.onLine) return;
-  const token = (JSON.parse(saved) as { token: string }).token;
+  const token = getStoredToken();
+  if (!token || !navigator.onLine) return;
   if (uploadingRef.current || syncing) return;
   uploadingRef.current = true;
   setUploading(true);
@@ -313,14 +403,33 @@ export function App(){
   }
 
   const handleUpdateVendor = async (updated: Vendor) => {
-   try {
-     await storage.updateVendor(updated)
-     await load()
-     setNotice(`Vendor "${updated.name}" updated successfully.`)
-     triggerBackgroundUpload()
-   } catch (err) {
-     setNotice(err instanceof Error ? `Failed to update vendor: ${err.message}` : 'Failed to update vendor.')
-   }
+    try {
+      await storage.updateVendor(updated)
+      await load()
+      const token = getStoredToken();
+      if (navigator.onLine && token) {
+        try {
+          const res = await workerApi<Vendor>('/vendors', { method: 'POST', token, body: updated });
+          if (res && res.id && res.id !== updated.id) {
+            await storage.remapVendorId(updated.id, res.id, res);
+          }
+          const pending = (await storage.pendingOperations()).find(op => op.entity_type === 'vendor' && ((JSON.parse(op.payload || '{}') as { id?: string }).id === updated.id));
+          if (pending) {
+            await storage.completeOperation(pending.id);
+          }
+          await load();
+          setNotice(`Vendor "${updated.name}" updated locally and synced to cloud.`);
+          return;
+        } catch {
+          triggerBackgroundUpload();
+          setNotice(`Vendor "${updated.name}" updated locally. Cloud sync pending.`);
+          return;
+        }
+      }
+      setNotice(`Vendor "${updated.name}" updated locally (offline). It will sync automatically when online.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? `Failed to update vendor: ${err.message}` : 'Failed to update vendor.')
+    }
   }
   const handleArchiveVendor = async (vendor: Vendor) => {
    try {
@@ -419,7 +528,7 @@ export function App(){
  if(!session)return <Login onSession={setSession}/>
  const commonViews:View[]=['catalogue','history','vendors','products','batch','taxonomy','storage']
  const views=(session.role==='ADMIN'?[...commonViews,'devices']:commonViews) as View[]
-  const logout=()=>{sessionStorage.removeItem(sessionKey);void storage.clearSession();setSession(null)}
+  const logout=()=>{sessionStorage.removeItem(sessionKey);localStorage.removeItem(sessionKey);void storage.clearSession();setSession(null)}
   return <div className="app-shell"><header><div className="brand"><span className="mark">S</span><div><strong>shine jewels</strong><small>{session.role==='ADMIN'?'administrator':'sales catalogue'}</small></div></div><div className="session-actions"><div className="connection" style={{color:online?((syncing||uploading)?'var(--gold)':'var(--green)'):'var(--muted)'}}><i style={{background:online?((syncing||uploading)?'var(--gold)':'var(--green)'):'var(--muted)'}}/> {online?((syncing||uploading)?(syncing?'Syncing…':'Uploading…'):`Online · ${session.displayName}`):`Offline · ${session.displayName}`}</div><button className="quiet logout" onClick={logout}>Log out</button></div></header>
   <nav aria-label="Primary navigation">{views.map(item=><button key={item} className={view===item?'active':''} onClick={()=>setView(item)}>{item}</button>)}</nav>
   {notice&&<div className="notice" role="status">{notice}<button onClick={()=>setNotice('')} aria-label="Dismiss message">×</button></div>}
@@ -808,7 +917,7 @@ export function App(){
     </div>
    </main>
   )}
- {view==='storage'&&<main className="single-view storage"><div className="section-title"><div><p className="eyebrow">device replica</p><h1>Storage &amp; synchronization</h1></div><span>Checkpoint #{syncCheckpointVal}</span></div><div className="storage-card"><strong>{cloudBytes===null?'—':(cloudBytes/1024).toFixed(1)+' KB'}</strong><span>Cloud R2 catalogue images</span><p>Calculated from the authenticated organization’s confirmed grid/detail image metadata. This is the cloud catalogue total, not a browser cache estimate.</p><strong>{(bytes/1024).toFixed(1)} KB</strong><span>This device’s OPFS image replica</span><p>Images saved while working offline are counted here separately and remain on this device until explicitly cleared.</p><div style={{display:'flex',gap:'10px',alignItems:'center',padding:'8px 0'}}><span>Offline queue:</span><strong>{pendingCount} operation(s) pending sync</strong>{pendingCount>0&&<button className="quiet" style={{minHeight:'28px',padding:'0 8px',fontSize:'12px'}} onClick={async()=>{await storage.clearPendingOperations();await load();setNotice('Pending operations queue cleared.')}}>Clear queue</button>}</div><button className="primary" disabled={syncing||!online} onClick={()=>void triggerSync()}>{syncing?'Synchronizing…':'Run Full Synchronization'}</button><button className="quiet" disabled={recovering||!online} onClick={()=>void triggerImageRecovery()}>{recovering?'Recovering images…':'Scan & Recover Missing Images'}</button><button className="quiet" disabled={uploading||!online} onClick={()=>void uploadImages()}>{uploading?'Uploading pending images…':'Upload pending product images'}</button><button className="quiet" onClick={()=>{void load();void loadCloudStorage()}}>Refresh storage estimate</button></div></main>}
+ {view==='storage'&&<main className="single-view storage"><div className="section-title"><div><p className="eyebrow">device replica</p><h1>Storage &amp; synchronization</h1></div><span>Checkpoint #{syncCheckpointVal}</span></div><div className="storage-card"><strong>{cloudBytes===null?'—':(cloudBytes/(1024*1024)).toFixed(2)+' MB'}</strong><span>Cloud R2 catalogue images</span><p>Calculated from the authenticated organization’s confirmed grid/detail image metadata. This is the cloud catalogue total, not a browser cache estimate.</p><strong>{(bytes/(1024*1024)).toFixed(2)} MB</strong><span>This device’s OPFS image replica</span><p>Images saved while working offline are counted here separately and remain on this device until explicitly cleared.</p><div style={{display:'flex',gap:'10px',alignItems:'center',padding:'8px 0'}}><span>Offline queue:</span><strong>{pendingCount} operation(s) pending sync</strong>{pendingCount>0&&<button className="quiet" style={{minHeight:'28px',padding:'0 8px',fontSize:'12px'}} onClick={async()=>{await storage.clearPendingOperations();await load();setNotice('Pending operations queue cleared.')}}>Clear queue</button>}</div><button className="primary" disabled={syncing||!online} onClick={()=>void triggerSync()}>{syncing?'Synchronizing…':'Run Full Synchronization'}</button><button className="quiet" disabled={recovering||!online} onClick={()=>void triggerImageRecovery()}>{recovering?'Recovering images…':'Scan & Recover Missing Images'}</button><button className="quiet" disabled={uploading||!online} onClick={()=>void uploadImages()}>{uploading?'Uploading pending images…':'Upload pending product images'}</button><button className="quiet" onClick={()=>{void load();void loadCloudStorage()}}>Refresh storage estimate</button></div></main>}
  {view==='devices'&&session.role==='ADMIN'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">security &amp; administration</p><h1>Authorized Device Sessions</h1></div><span>{devices.length} registered</span></div><div className="records">{devices.map(d=><article key={d.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><div><strong>{d.device_name}</strong><span>Device ID: {d.device_id}</span><small>Last seen: {new Date(d.last_seen_at).toLocaleString()} · Expires: {new Date(d.offline_authorization_expires_at).toLocaleDateString()}</small>{d.revoked_at&&<span style={{color:'var(--danger)'}}>Revoked on {new Date(d.revoked_at).toLocaleString()}</span>}</div>{!d.revoked_at&&<button className="quiet" style={{color:'var(--danger)',borderColor:'var(--danger)'}} onClick={()=>void revokeDevice(d.id)}>Revoke access</button>}</article>)}</div></main>}
   {detail && (
    <div
@@ -836,6 +945,11 @@ export function App(){
       src={resolvedDetailUrl || detail.gridImage}
       alt={`${detail.designCode} detailed jewelry view`}
       loading="eager"
+      onError={() => {
+        if (resolvedDetailUrl !== detail.gridImage && detail.gridImage) {
+          setResolvedDetailUrl(detail.gridImage)
+        }
+      }}
      />
      <button
       type="button"

@@ -27,13 +27,13 @@ export function EditVendorModal({ vendor, existingVendors, onSave, onClose }: Ed
       return
     }
 
-    const normKey = `${trimmedName.toLowerCase()}|${trimmedCity.toLowerCase()}`
+    const normKey = `${trimmedName.toLowerCase()}|${trimmedAddress.toLowerCase()}`
     const isDuplicate = existingVendors.some(
-      v => v.id !== vendor.id && !v.deleted && `${v.name.trim().toLowerCase()}|${v.city.trim().toLowerCase()}` === normKey
+      v => v.id !== vendor.id && !v.deleted && `${v.name.trim().toLowerCase()}|${v.address.trim().toLowerCase()}` === normKey
     )
 
     if (isDuplicate) {
-      setError(`A vendor named "${trimmedName}" in "${trimmedCity}" already exists. Vendor name and city combination must be unique.`)
+      setError(`A vendor named "${trimmedName}" at "${trimmedAddress}" already exists. Vendor name and address combination must be unique.`)
       return
     }
 

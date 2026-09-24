@@ -61,26 +61,26 @@ describe('business invariant helpers',()=>{
   expect(prod.gridImage).not.toContain('[object Object]')
   expect(prod.gridImage).toContain('shine-jewels-demo/products/p202/v1/grid')
  })
- it('enforces vendor uniqueness on normalized name and city', ()=>{
+ it('enforces vendor uniqueness on normalized name and address (allowing same name in same city with different addresses)', ()=>{
   const rawVendors = [
-   { id: 'v1', name: 'Shree Radhey Jewellers', city: 'Mumbai', address: 'Zaveri Bazaar', type: 'WHOLESALE' },
-   { id: 'v2', name: 'shree radhey jewellers ', city: ' mumbai', address: 'Old Zaveri Bazaar', type: 'WHOLESALE' },
-   { id: 'v3', name: 'Shree Radhey Jewellers', city: 'Surat', address: 'Ring Road', type: 'RETAIL' },
-   { id: 'v4', name: 'Kalyan Jewellers', city: 'Mumbai', address: 'Bandra', type: 'RETAIL' }
+   { id: 'v1', name: 'Kalyan Jewellers', city: 'Mumbai', address: 'Bandra', type: 'RETAIL' },
+   { id: 'v2', name: 'kalyan jewellers ', city: 'mumbai', address: ' bandra ', type: 'RETAIL' },
+   { id: 'v3', name: 'Kalyan Jewellers', city: 'Mumbai', address: 'Andheri', type: 'RETAIL' },
+   { id: 'v4', name: 'Shree Radhey Jewellers', city: 'Surat', address: 'Ring Road', type: 'WHOLESALE' }
   ]
-  const byNameCity = new Map<string, typeof rawVendors[0]>()
+  const byNameAddress = new Map<string, typeof rawVendors[0]>()
   for (const v of rawVendors) {
-   const key = `${v.name.trim().toLowerCase()}|${v.city.trim().toLowerCase()}`
-   if (!byNameCity.has(key)) {
-    byNameCity.set(key, v)
+   const key = `${v.name.trim().toLowerCase()}|${v.address.trim().toLowerCase()}`
+   if (!byNameAddress.has(key)) {
+    byNameAddress.set(key, v)
    }
   }
-  const deduped = Array.from(byNameCity.values())
+  const deduped = Array.from(byNameAddress.values())
   expect(deduped).toHaveLength(3)
-  expect(deduped.map(v => `${v.name.trim().toLowerCase()}|${v.city.trim().toLowerCase()}`)).toEqual([
-   'shree radhey jewellers|mumbai',
-   'shree radhey jewellers|surat',
-   'kalyan jewellers|mumbai'
+  expect(deduped.map(v => `${v.name.trim().toLowerCase()}|${v.address.trim().toLowerCase()}`)).toEqual([
+   'kalyan jewellers|bandra',
+   'kalyan jewellers|andheri',
+   'shree radhey jewellers|ring road'
   ])
  })
   it('enforces 5 MB maximum file size cap for uploads', ()=>{
@@ -164,24 +164,26 @@ describe('business invariant helpers',()=>{
     expect(canArchiveSubcategory('sub-solitaire').allowed).toBe(false)
     expect(canArchiveSubcategory('sub-band').allowed).toBe(true)
    })
-   it('prevents vendor rename colliding with existing active vendor name and city', ()=>{
+   it('prevents vendor rename colliding with existing active vendor name and address, but allows same city', ()=>{
     const activeVendors = [
-      { id: 'v1', name: 'Zaveri Jewellers', city: 'Mumbai', deleted: false },
-      { id: 'v2', name: 'Surat Gems', city: 'Surat', deleted: false }
+      { id: 'v1', name: 'Zaveri Jewellers', address: 'Bandra', city: 'Mumbai', deleted: false },
+      { id: 'v2', name: 'Surat Gems', address: 'Ring Road', city: 'Surat', deleted: false }
     ]
-    const validateVendorEdit = (editingId: string, newName: string, newCity: string) => {
-      const normKey = `${newName.trim().toLowerCase()}|${newCity.trim().toLowerCase()}`
+    const validateVendorEdit = (editingId: string, newName: string, newAddress: string) => {
+      const normKey = `${newName.trim().toLowerCase()}|${newAddress.trim().toLowerCase()}`
       return !activeVendors.some(
-        v => v.id !== editingId && !v.deleted && `${v.name.trim().toLowerCase()}|${v.city.trim().toLowerCase()}` === normKey
+        v => v.id !== editingId && !v.deleted && `${v.name.trim().toLowerCase()}|${v.address.trim().toLowerCase()}` === normKey
       )
     }
-    // Colliding with v1
-    expect(validateVendorEdit('v2', 'Zaveri Jewellers', 'Mumbai')).toBe(false)
-    expect(validateVendorEdit('v2', '  zaveri jewellers ', 'mumbai ')).toBe(false)
-    // Keeping same name/city on same vendor id
-    expect(validateVendorEdit('v1', 'Zaveri Jewellers', 'Mumbai')).toBe(true)
-    // Unique new name/city
-    expect(validateVendorEdit('v2', 'Surat Diamond Craft', 'Surat')).toBe(true)
+    // Colliding with v1 name and address
+    expect(validateVendorEdit('v2', 'Zaveri Jewellers', 'Bandra')).toBe(false)
+    expect(validateVendorEdit('v2', '  zaveri jewellers ', '  bandra ')).toBe(false)
+    // Same name, same city (Mumbai), but different address -> ALLOWED
+    expect(validateVendorEdit('v2', 'Zaveri Jewellers', 'Andheri')).toBe(true)
+    // Keeping same name/address on same vendor id
+    expect(validateVendorEdit('v1', 'Zaveri Jewellers', 'Bandra')).toBe(true)
+    // Unique new name/address
+    expect(validateVendorEdit('v2', 'Surat Diamond Craft', 'Varachha')).toBe(true)
    })
    it('bounds progressive catalogue windowing to prevent DOM memory explosion', ()=>{
     const INITIAL_BATCH = 40
@@ -234,6 +236,44 @@ describe('business invariant helpers',()=>{
     expect(hasNext(148)).toBe(true)
     expect(hasNext(149)).toBe(false)
     expect(lastItem.designCode).toBe('SJ-149')
+   })
+   it('heals corrupt detail image metadata (< 1000 byte HTML document) by falling back to grid image', ()=>{
+    const corruptRecord = {
+      id: 'prod-corrupt-1',
+      design_code: 'SJ-CORRUPT-TEST',
+      category_id: 'cat-1',
+      subcategory_id: 'sub-1',
+      weight_mg: 5000,
+      grid_image_key: 'shine-jewels-demo/products/p-corrupt/v1/grid',
+      detail_image_key: 'shine-jewels-demo/products/p-corrupt/v1/detail',
+      grid_image_checksum: 'e'.repeat(64),
+      detail_image_checksum: 'f'.repeat(64),
+      grid_image_size_bytes: 45000,
+      detail_image_size_bytes: 476, // 476 byte index.html artifact
+      image_version: 1
+    }
+    const healed = productFromRecord(corruptRecord)
+    expect(healed.id).toBe('prod-corrupt-1')
+    // detail image key must have been healed to match grid image key
+    expect(healed.detailImageKey).toBe('shine-jewels-demo/products/p-corrupt/v1/grid')
+    expect(healed.detailImageSizeBytes).toBe(45000)
+    expect(healed.detailImageChecksum).toBe('e'.repeat(64))
+    expect(healed.detailImage).toContain('shine-jewels-demo/products/p-corrupt/v1/grid')
+   })
+   it('formats appropriate vendor save status messages based on connectivity', ()=>{
+    const getVendorNotice = (name: string, isOnline: boolean, syncedDirectly: boolean) => {
+      if (isOnline && syncedDirectly) {
+        return `Vendor "${name}" saved locally and synced to cloud.`
+      }
+      if (isOnline && !syncedDirectly) {
+        return `Vendor "${name}" saved locally. Cloud sync pending.`
+      }
+      return `Vendor "${name}" saved locally (offline). It will sync automatically when online.`
+    }
+
+    expect(getVendorNotice('Tribhovandas', true, true)).toBe('Vendor "Tribhovandas" saved locally and synced to cloud.')
+    expect(getVendorNotice('Tribhovandas', true, false)).toBe('Vendor "Tribhovandas" saved locally. Cloud sync pending.')
+    expect(getVendorNotice('Tribhovandas', false, false)).toBe('Vendor "Tribhovandas" saved locally (offline). It will sync automatically when online.')
    })
 })
 

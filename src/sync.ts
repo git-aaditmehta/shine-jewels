@@ -1,7 +1,7 @@
 
 import { workerApi } from './api'
 import { storage } from './storage'
-import type { Category, Product, Subcategory, Vendor } from './types'
+import type { Category, Order, Product, Subcategory, Vendor } from './types'
 
 type Change = { sequence_number: number; entity_type: string; entity_id: string; operation: string; payload: string }
 type Bootstrap = { categories: Record<string, unknown>[]; subcategories: Record<string, unknown>[]; vendors: Record<string, unknown>[]; products: Record<string, unknown>[]; presentations: Record<string, unknown>[]; checkpoint: number }
@@ -13,14 +13,21 @@ export const productFromRecord = (x: Record<string, unknown>): Product => {
   const gridObj = typeof x.gridImage === 'object' && x.gridImage !== null ? (x.gridImage as Record<string, unknown>) : null
   const detailObj = typeof x.detailImage === 'object' && x.detailImage !== null ? (x.detailImage as Record<string, unknown>) : null
 
-  const gridKey = String(x.grid_image_key || gridObj?.key || x.gridImageKey || '')
-  const detailKey = String(x.detail_image_key || detailObj?.key || x.detailImageKey || '')
+  let gridKey = String(x.grid_image_key || gridObj?.key || x.gridImageKey || '')
+  let detailKey = String(x.detail_image_key || detailObj?.key || x.detailImageKey || '')
 
-  const gridChecksum = String(x.grid_image_checksum || gridObj?.checksum || x.gridImageChecksum || '')
-  const detailChecksum = String(x.detail_image_checksum || detailObj?.checksum || x.detailImageChecksum || '')
+  let gridChecksum = String(x.grid_image_checksum || gridObj?.checksum || x.gridImageChecksum || '')
+  let detailChecksum = String(x.detail_image_checksum || detailObj?.checksum || x.detailImageChecksum || '')
 
-  const gridSize = Number(x.grid_image_size_bytes || gridObj?.sizeBytes || x.gridImageSizeBytes || 0)
-  const detailSize = Number(x.detail_image_size_bytes || detailObj?.sizeBytes || x.detailImageSizeBytes || 0)
+  let gridSize = Number(x.grid_image_size_bytes || gridObj?.sizeBytes || x.gridImageSizeBytes || 0)
+  let detailSize = Number(x.detail_image_size_bytes || detailObj?.sizeBytes || x.detailImageSizeBytes || 0)
+
+  // Heal corrupt detail image metadata (< 1000 byte HTML documents from legacy bug)
+  if (detailSize > 0 && detailSize < 1000 && gridSize >= 1000) {
+    detailKey = gridKey
+    detailChecksum = gridChecksum
+    detailSize = gridSize
+  }
 
   let gridImg = ''
   if (gridKey) {
@@ -34,6 +41,9 @@ export const productFromRecord = (x: Record<string, unknown>): Product => {
     detailImg = imageUrl(detailKey)
   } else if (typeof x.detailImage === 'string' && x.detailImage) {
     detailImg = x.detailImage
+  }
+  if (!detailImg || (typeof detailImg === 'string' && !detailImg.startsWith('data:') && !detailImg.startsWith('http'))) {
+    detailImg = gridImg
   }
 
   return {
@@ -68,6 +78,7 @@ export async function computeSha256(data: string | ArrayBuffer): Promise<string>
 }
 
 export async function sourceToBlobAndChecksum(source: string): Promise<{ blob: Blob; checksum: string; contentType: string }> {
+  if (!source) throw new Error('Image source is empty.')
   if (source.startsWith('data:')) {
     const parts = source.split(',')
     const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/jpeg'
@@ -81,12 +92,26 @@ export async function sourceToBlobAndChecksum(source: string): Promise<{ blob: B
     const blob = new Blob([u8arr], { type: mime })
     return { blob, checksum, contentType: mime }
   }
+  if (!source.startsWith('http://') && !source.startsWith('https://')) {
+    const localData = await storage.getImage(source)
+    if (localData && localData.startsWith('data:')) {
+      return sourceToBlobAndChecksum(localData)
+    }
+    throw new Error(`Cannot load image from non-URL source: ${source}`)
+  }
   const res = await fetch(source)
   if (!res.ok) throw new Error(`Could not load image resource (${res.status}).`)
+  const contentType = res.headers.get('content-type') || ''
+  if (contentType.includes('text/html')) {
+    throw new Error('Received HTML document instead of image.')
+  }
   const blob = await res.blob()
+  if (blob.size < 500 && contentType.includes('html')) {
+    throw new Error('Received invalid HTML response for image.')
+  }
   const buffer = await blob.arrayBuffer()
   const checksum = await computeSha256(buffer)
-  return { blob, checksum, contentType: blob.type || 'image/jpeg' }
+  return { blob, checksum, contentType: blob.type || contentType || 'image/jpeg' }
 }
 
 async function directUpload(token: string, productId: string, representation: 'grid' | 'detail', source: string, version: number, precomputed?: { blob: Blob; checksum: string; contentType: string }) {
@@ -128,22 +153,39 @@ export async function uploadProductOnline(token: string, productId: string): Pro
   let gridImage = { key: finalItem.gridImageKey || '', sizeBytes: finalItem.gridImageSizeBytes || 0, checksum: finalItem.gridImageChecksum || '' }
   let detailImage = { key: finalItem.detailImageKey || '', sizeBytes: finalItem.detailImageSizeBytes || 0, checksum: finalItem.detailImageChecksum || '' }
 
-  const needsGridUpload = finalItem.gridImage.startsWith('data:') || !finalItem.gridImageKey
-  const needsDetailUpload = finalItem.detailImage.startsWith('data:') || !finalItem.detailImageKey
+  // Resolve actual image data if local OPFS path
+  let gridSource = finalItem.gridImage
+  if (!gridSource.startsWith('data:') && !gridSource.startsWith('http://') && !gridSource.startsWith('https://')) {
+    gridSource = (await storage.getImage(gridSource)) || ''
+  }
+  let detailSource = finalItem.detailImage
+  if (!detailSource.startsWith('data:') && !detailSource.startsWith('http://') && !detailSource.startsWith('https://')) {
+    detailSource = (await storage.getImage(detailSource)) || ''
+  }
+  // If detail image could not be resolved, fall back to gridSource
+  if (!detailSource) {
+    detailSource = gridSource
+  }
+  if (!gridSource) {
+    gridSource = detailSource
+  }
+
+  const needsGridUpload = gridSource.startsWith('data:') || !finalItem.gridImageKey
+  const needsDetailUpload = detailSource.startsWith('data:') || !finalItem.detailImageKey || (finalItem.detailImageSizeBytes !== undefined && finalItem.detailImageSizeBytes < 1000)
 
   if (needsGridUpload || needsDetailUpload) {
     let gridPre: { blob: Blob; checksum: string; contentType: string } | undefined
     let detailPre: { blob: Blob; checksum: string; contentType: string } | undefined
-    if (finalItem.gridImage === finalItem.detailImage && finalItem.gridImage) {
-      const shared = await sourceToBlobAndChecksum(finalItem.gridImage)
+    if (gridSource === detailSource && gridSource) {
+      const shared = await sourceToBlobAndChecksum(gridSource)
       gridPre = shared
       detailPre = shared
     }
-    if (needsGridUpload) {
-      gridImage = await directUpload(token, finalItem.id, 'grid', finalItem.gridImage, finalItem.imageVersion, gridPre)
+    if (needsGridUpload && gridSource) {
+      gridImage = await directUpload(token, finalItem.id, 'grid', gridSource, finalItem.imageVersion, gridPre)
     }
-    if (needsDetailUpload) {
-      detailImage = await directUpload(token, finalItem.id, 'detail', finalItem.detailImage, finalItem.imageVersion, detailPre)
+    if (needsDetailUpload && detailSource) {
+      detailImage = await directUpload(token, finalItem.id, 'detail', detailSource, finalItem.imageVersion, detailPre)
     }
   }
   const res = await workerApi<Product & { id: string }>('/products', {
@@ -215,8 +257,16 @@ export async function push(token: string, operation: Awaited<ReturnType<typeof s
     return res
   }
   if (operation.entity_type === 'presentation') {
-    const order = payload as unknown as { id: string; vendor: { id: string }; items: { productId: string; quantity: number; remark: string }[] }
-    return workerApi('/orders', { method: 'POST', token, body: { id: order.id, vendorId: order.vendor.id, items: order.items.map(item => ({ productId: item.productId, quantity: item.quantity, remark: item.remark })) } })
+    const order = payload as unknown as { id: string; orderNumber?: number; vendor: { id: string }; items: { productId: string; quantity: number; remark: string }[] }
+    const res = await workerApi<Record<string, unknown>>('/orders', { method: 'POST', token, body: { id: order.id, vendorId: order.vendor.id, items: order.items.map(item => ({ productId: item.productId, quantity: item.quantity, remark: item.remark })) } })
+    if (res && res.id) {
+      if (res.id !== order.id) {
+        await storage.remapOrderId(order.id, String(res.id), res)
+      } else {
+        await storage.applyRemoteChange({ entityType: 'presentation', entityId: String(res.id), operation: 'FINALIZE', payload: res })
+      }
+    }
+    return res
   }
   if (operation.entity_type === 'product') {
     if (operation.operation === 'ARCHIVE') {
@@ -363,7 +413,48 @@ export async function synchronize(token: string, onProgress?: (msg: string) => v
     await storage.setSyncCheckpoint(change.sequence_number)
   }
 
+  // 3. Ensure historical orders are synced
+  await syncHistoryOrders(token)
+
   return { synced: true, uploaded, failed, pulled: changes.length }
+}
+
+export async function syncHistoryOrders(token: string) {
+  try {
+    const list = await workerApi<Array<{ id: string; order_number?: number }>>('/history', { token })
+    const existingOrders = await storage.orders()
+    const existingMap = new Map(existingOrders.map(o => [o.id, o]))
+    const existingByNumber = new Map<number, Order>()
+    for (const o of existingOrders) {
+      if (o.orderNumber && o.orderNumber > 0) {
+        existingByNumber.set(o.orderNumber, o)
+      }
+    }
+    for (const h of list) {
+      const existing = existingMap.get(h.id) || (h.order_number ? existingByNumber.get(h.order_number) : undefined)
+      if (!existing || !existing.items || existing.items.length === 0 || existing.id !== h.id) {
+        try {
+          const detail = await workerApi<{ presentation: Record<string, unknown>; items: Record<string, unknown>[] }>(`/orders/${h.id}`, { token })
+          if (detail?.presentation) {
+            if (existing && existing.id !== h.id) {
+              await storage.remapOrderId(existing.id, h.id, { ...detail.presentation, items: detail.items || [] })
+            } else {
+              await storage.applyRemoteChange({
+                entityType: 'presentation',
+                entityId: h.id,
+                operation: 'FINALIZE',
+                payload: { ...detail.presentation, items: detail.items || [] }
+              })
+            }
+          }
+        } catch (err) {
+          console.warn(`Failed to sync order detail for ${h.id}:`, err)
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('History order sync failed:', err)
+  }
 }
 
 export async function recoverMissingImages(token: string, onProgress?: (msg: string) => void) {
