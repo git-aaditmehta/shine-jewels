@@ -168,10 +168,21 @@ function normalizeOrderForPdf(order: Order): Order {
 
   const orderNumber = Number(order.orderNumber || raw.order_number || 0)
   const items = Array.isArray(order.items) ? order.items : []
+  const rawReps = Array.isArray(order.representatives)
+    ? order.representatives
+    : Array.isArray(raw.representatives)
+      ? (raw.representatives as Record<string, unknown>[])
+      : []
+  const representatives = rawReps.map(r => ({
+    name: String(r.name || '').trim(),
+    phone: String(r.phone || '').trim()
+  })).filter(r => r.name || r.phone)
+
   return {
     ...order,
     orderNumber,
     vendor,
+    representatives: representatives.length ? representatives : undefined,
     items,
     salesperson: String(order.salesperson || raw.salesperson_id || 'Salesperson'),
     generatedAt: String(order.generatedAt || raw.generated_at || order.createdAt || new Date().toISOString())
@@ -222,38 +233,93 @@ export async function createOrderPdfBlob(rawOrder: Order): Promise<GeneratedPdfR
     pdf.setTextColor(23, 35, 30)
     pdf.text(`#${String(order.orderNumber).padStart(4, '0')}`, 147, startY + 13)
 
-    // Vendor and Order metadata cards
+    // Vendor, Vendor Representative, and Order metadata card
+    const cardHeight = 25
     pdf.setFillColor(255, 253, 248)
     pdf.setDrawColor(217, 216, 207)
-    pdf.roundedRect(14, startY + 18, 182, 22, 2, 2, 'FD')
+    pdf.roundedRect(14, startY + 18, 182, cardHeight, 2, 2, 'FD')
 
-    // Vendor info (left side)
+    // Vertical dividers between the 3 sections
+    pdf.setDrawColor(230, 228, 220)
+    pdf.line(80, startY + 20, 80, startY + 18 + cardHeight - 2)
+    pdf.line(138, startY + 20, 138, startY + 18 + cardHeight - 2)
+
+    // 1. Vendor info (Col 1: 14 to 80 mm)
     pdf.setFontSize(7)
     pdf.setFont('helvetica', 'bold')
     pdf.setTextColor(169, 119, 43)
-    pdf.text('VENDOR INFORMATION', 18, startY + 23.5)
+    pdf.text('VENDOR INFORMATION', 17, startY + 23)
 
-    pdf.setFontSize(10.5)
+    pdf.setFontSize(10)
     pdf.setFont('helvetica', 'bold')
     pdf.setTextColor(23, 35, 30)
-    pdf.text(order.vendor.name, 18, startY + 29)
+    const vendorNameDisplay = pdf.splitTextToSize(order.vendor.name, 60)[0] || order.vendor.name
+    pdf.text(vendorNameDisplay, 17, startY + 28)
 
-    pdf.setFontSize(7.5)
+    pdf.setFontSize(7)
     pdf.setFont('helvetica', 'normal')
     pdf.setTextColor(102, 112, 105)
-    pdf.text(`${order.vendor.address}, ${order.vendor.city} · Type: ${order.vendor.type}`, 18, startY + 34.5)
+    const vendorAddrLine = `${order.vendor.address}, ${order.vendor.city}`
+    const splitAddr = pdf.splitTextToSize(vendorAddrLine, 60)
+    pdf.text(splitAddr[0] || vendorAddrLine, 17, startY + 33)
+    pdf.text(`Type: ${order.vendor.type}`, 17, startY + 37.5)
 
-    // Order info (right side)
+    // 2. Vendor Representative(s) (Col 2: 80 to 138 mm)
     pdf.setFontSize(7)
     pdf.setFont('helvetica', 'bold')
     pdf.setTextColor(169, 119, 43)
-    pdf.text('ORDER DETAILS', 120, startY + 23.5)
+    pdf.text('VENDOR REPRESENTATIVE', 83, startY + 23)
 
-    pdf.setFontSize(7.5)
+    const reps = (order.representatives || []).filter(r => (r.name && r.name.trim()) || (r.phone && r.phone.trim()))
+    if (reps.length === 0) {
+      pdf.setFontSize(8)
+      pdf.setFont('helvetica', 'normal')
+      pdf.setTextColor(102, 112, 105)
+      pdf.text('—', 83, startY + 29)
+    } else if (reps.length === 1) {
+      const rep = reps[0]
+      pdf.setFontSize(9)
+      pdf.setFont('helvetica', 'bold')
+      pdf.setTextColor(23, 35, 30)
+      pdf.text(rep.name.trim() || '—', 83, startY + 28)
+
+      pdf.setFontSize(7.5)
+      pdf.setFont('helvetica', 'normal')
+      pdf.setTextColor(102, 112, 105)
+      pdf.text(rep.phone.trim() ? `Tel: ${rep.phone.trim()}` : '—', 83, startY + 33.5)
+    } else {
+      // Multiple representatives
+      let repY = startY + 27.5
+      reps.slice(0, 3).forEach((rep) => {
+        pdf.setFontSize(7.5)
+        pdf.setFont('helvetica', 'bold')
+        pdf.setTextColor(23, 35, 30)
+        const repNameText = rep.name.trim() || '—'
+        const repPhoneText = rep.phone.trim() ? ` (${rep.phone.trim()})` : ''
+        const fullRepText = pdf.splitTextToSize(`${repNameText}${repPhoneText}`, 53)[0] || `${repNameText}${repPhoneText}`
+        pdf.text(`• ${fullRepText}`, 83, repY)
+        repY += 4.5
+      })
+      if (reps.length > 3) {
+        pdf.setFontSize(6.5)
+        pdf.setFont('helvetica', 'italic')
+        pdf.setTextColor(102, 112, 105)
+        pdf.text(`+${reps.length - 3} more`, 83, repY)
+      }
+    }
+
+    // 3. Order Details (Col 3: 138 to 196 mm)
+    pdf.setFontSize(7)
+    pdf.setFont('helvetica', 'bold')
+    pdf.setTextColor(169, 119, 43)
+    pdf.text('ORDER DETAILS', 141, startY + 23)
+
+    pdf.setFontSize(7)
     pdf.setFont('helvetica', 'normal')
     pdf.setTextColor(23, 35, 30)
-    pdf.text(`Date: ${orderDate.toLocaleDateString('en-GB')} ${orderDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, 120, startY + 29)
-    pdf.text(`Sales Representative: ${order.salesperson || 'Salesperson'}`, 120, startY + 34.5)
+    pdf.text(`Date: ${orderDate.toLocaleDateString('en-GB')}`, 141, startY + 28)
+    pdf.text(`Time: ${orderDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, 141, startY + 32.5)
+    pdf.text(`Sales Rep: ${order.salesperson || 'Salesperson'}`, 141, startY + 37)
   }
 
   const drawTableColumnHeader = (tableY: number) => {
@@ -273,9 +339,9 @@ export async function createOrderPdfBlob(rawOrder: Order): Promise<GeneratedPdfR
 
   // Draw Page 1 header
   drawHeader(12)
-  drawTableColumnHeader(56)
+  drawTableColumnHeader(58)
 
-  let y = 64
+  let y = 66
   const rowHeight = 22
 
   for (let index = 0; index < order.items.length; index++) {

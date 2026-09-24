@@ -399,11 +399,18 @@ class SqliteOpfsStorage implements CatalogueStorage {
       const generatedAt = String(o.generatedAt || o.generated_at || o.createdAt || new Date().toISOString())
       const createdAt = String(o.createdAt || o.generatedAt || o.generated_at || new Date().toISOString())
 
+      const rawReps = Array.isArray(o.representatives) ? (o.representatives as Record<string, unknown>[]) : []
+      const representatives = rawReps.map(r => ({
+        name: String(r.name || '').trim(),
+        phone: String(r.phone || '').trim()
+      })).filter(r => r.name || r.phone)
+
       return {
         ...o,
         id: String(o.id),
         orderNumber,
         vendor,
+        representatives: representatives.length ? representatives : undefined,
         items: itemsList,
         salesperson,
         status: (o.status as Order['status']) || 'FINALIZED',
