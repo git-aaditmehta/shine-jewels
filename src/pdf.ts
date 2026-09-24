@@ -331,10 +331,11 @@ export async function createOrderPdfBlob(rawOrder: Order): Promise<GeneratedPdfR
     pdf.setTextColor(255, 255, 255)
     pdf.text('#', 17, tableY + 5.5)
     pdf.text('PREVIEW', 27, tableY + 5.5)
-    pdf.text('DESIGN DETAILS', 56, tableY + 5.5)
-    pdf.text('WEIGHT', 124, tableY + 5.5, { align: 'right' })
-    pdf.text('QTY', 148, tableY + 5.5, { align: 'right' })
-    pdf.text('REMARKS', 154, tableY + 5.5)
+    pdf.text('DESIGN DETAILS', 54, tableY + 5.5)
+    pdf.text('UNIT WT', 108, tableY + 5.5, { align: 'right' })
+    pdf.text('QTY', 128, tableY + 5.5, { align: 'right' })
+    pdf.text('TOTAL WT', 156, tableY + 5.5, { align: 'right' })
+    pdf.text('REMARKS', 162, tableY + 5.5)
   }
 
   // Draw Page 1 header
@@ -373,51 +374,62 @@ export async function createOrderPdfBlob(rawOrder: Order): Promise<GeneratedPdfR
     // 2. Embedded Thumbnail Image
     if (imgData) {
       try {
-        pdf.addImage(imgData, 'JPEG', 27, y + 2, 18, 18)
+        pdf.addImage(imgData, 'JPEG', 26, y + 2, 18, 18)
         pdf.setDrawColor(217, 216, 207)
-        pdf.rect(27, y + 2, 18, 18, 'D')
+        pdf.rect(26, y + 2, 18, 18, 'D')
       } catch {
         pdf.setFillColor(242, 240, 235)
-        pdf.rect(27, y + 2, 18, 18, 'F')
+        pdf.rect(26, y + 2, 18, 18, 'F')
         pdf.setFontSize(6)
         pdf.setTextColor(150, 150, 150)
-        pdf.text('Image', 32, y + 11)
+        pdf.text('Image', 31, y + 11)
       }
     } else {
       pdf.setFillColor(242, 240, 235)
-      pdf.rect(27, y + 2, 18, 18, 'F')
+      pdf.rect(26, y + 2, 18, 18, 'F')
       pdf.setFontSize(6)
       pdf.setTextColor(150, 150, 150)
-      pdf.text('Image', 32, y + 11)
+      pdf.text('Image', 31, y + 11)
     }
 
     // 3. Design Code & Category
     pdf.setFontSize(9.5)
     pdf.setFont('helvetica', 'bold')
     pdf.setTextColor(23, 35, 30)
-    pdf.text(item.designCode, 56, y + 9)
+    pdf.text(item.designCode, 54, y + 9)
 
     pdf.setFontSize(7.5)
     pdf.setFont('helvetica', 'normal')
     pdf.setTextColor(102, 112, 105)
     const catText = `${item.category || ''}${item.subcategory ? ' · ' + item.subcategory : ''}`
-    pdf.text(catText || 'Fine Jewelry', 56, y + 14.5)
+    const catDisplay = pdf.splitTextToSize(catText || 'Fine Jewelry', 35)[0] || catText || 'Fine Jewelry'
+    pdf.text(catDisplay, 54, y + 14.5)
 
-    // 4. Weight in grams
-    pdf.setFontSize(9)
-    pdf.setFont('helvetica', 'bold')
+    // 4. Unit Weight in grams
+    pdf.setFontSize(8.5)
+    pdf.setFont('helvetica', 'normal')
     pdf.setTextColor(23, 35, 30)
-    pdf.text(`${grams(item.weightMg)} g`, 124, y + 12, { align: 'right' })
+    pdf.text(`${grams(item.weightMg)} g`, 108, y + 12, { align: 'right' })
 
     // 5. Quantity in pcs
-    pdf.text(`${item.quantity} pcs`, 148, y + 12, { align: 'right' })
+    pdf.setFontSize(8.5)
+    pdf.setFont('helvetica', 'bold')
+    pdf.setTextColor(23, 35, 30)
+    pdf.text(`${item.quantity} pcs`, 128, y + 12, { align: 'right' })
 
-    // 6. Remarks
+    // 6. Total Weight (Unit Weight * Quantity)
+    const itemTotalWeightMg = (item.weightMg || 0) * (item.quantity || 1)
+    pdf.setFontSize(8.5)
+    pdf.setFont('helvetica', 'bold')
+    pdf.setTextColor(169, 119, 43)
+    pdf.text(`${grams(itemTotalWeightMg)} g`, 156, y + 12, { align: 'right' })
+
+    // 7. Remarks
     pdf.setFontSize(7.5)
     pdf.setFont('helvetica', 'normal')
     pdf.setTextColor(102, 112, 105)
-    const remarkLines = pdf.splitTextToSize(item.remark || '—', 38)
-    pdf.text(remarkLines, 154, y + 9)
+    const remarkLines = pdf.splitTextToSize(item.remark || '—', 32)
+    pdf.text(remarkLines, 162, y + 9)
 
     y += rowHeight
   }
