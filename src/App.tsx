@@ -1244,5 +1244,5 @@ export function App(){
      onClose={() => setArchivingProduct(null)}
     />
    )}
-  <footer>Built by Aadit Mehta, contact mail: <a href="mailto:aaditbusiness15@gmail.com">aaditbusiness15@gmail.com</a></footer></div>
+  <footer>Built by Aadit Mehta, contact mail: <a href="mailto:aaditbusiness15@gmail.com">aaditbusiness15@gmail.com</a>, mobile: <a href="tel:7304767688">7304767688</a></footer></div>
 }
