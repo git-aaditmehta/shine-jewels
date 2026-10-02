@@ -35,3 +35,6 @@ Thumbs.db
 
 # Local agent rules
 .agents/rules/cloudflare_free_tier.md
+
+# Scalability and Private Architecture Blueprint
+SCALABILITY_BLUEPRINT.md
