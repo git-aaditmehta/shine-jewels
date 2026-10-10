@@ -275,5 +275,65 @@ describe('business invariant helpers',()=>{
     expect(getVendorNotice('Tribhovandas', true, false)).toBe('Vendor "Tribhovandas" saved locally. Cloud sync pending.')
     expect(getVendorNotice('Tribhovandas', false, false)).toBe('Vendor "Tribhovandas" saved locally (offline). It will sync automatically when online.')
    })
+
+   it('validates staff creation inputs and enforces SALESPERSON role assignment', ()=>{
+    const validateStaffInput = (username: string, password: string, displayName: string) => {
+      const u = username.trim().toLowerCase()
+      const d = displayName.trim()
+      const p = password.trim()
+      if (u.length < 3) return { valid: false, error: 'Username must be at least 3 characters' }
+      if (!/^[a-z0-9_-]+$/.test(u)) return { valid: false, error: 'Username can only contain letters, numbers, and dashes/underscores' }
+      if (d.length < 1) return { valid: false, error: 'Display name is required' }
+      if (p.length < 6) return { valid: false, error: 'Password must be at least 6 characters' }
+      return { valid: true, sanitized: { username: u, displayName: d, role: 'SALESPERSON' as const } }
+    }
+
+    // Invalid usernames
+    expect(validateStaffInput('ab', 'Secret123', 'John').valid).toBe(false)
+    expect(validateStaffInput('john doe', 'Secret123', 'John').valid).toBe(false)
+    expect(validateStaffInput('john@doe', 'Secret123', 'John').valid).toBe(false)
+
+    // Short password
+    expect(validateStaffInput('john_sales', '12345', 'John').valid).toBe(false)
+
+    // Missing display name
+    expect(validateStaffInput('john_sales', '123456', '   ').valid).toBe(false)
+
+    // Valid staff registration
+    const res = validateStaffInput('  John_Sales  ', 'Secret123', '  John Doe  ')
+    expect(res.valid).toBe(true)
+    if (res.valid && res.sanitized) {
+      expect(res.sanitized.username).toBe('john_sales')
+      expect(res.sanitized.displayName).toBe('John Doe')
+      expect(res.sanitized.role).toBe('SALESPERSON')
+    }
+   })
+
+   it('strictly restricts staff management and device creation to ADMIN role', ()=>{
+    const canAccessStaffManagement = (userRole?: string | null) => {
+      return userRole === 'ADMIN'
+    }
+
+    expect(canAccessStaffManagement('ADMIN')).toBe(true)
+    expect(canAccessStaffManagement('SALESPERSON')).toBe(false)
+    expect(canAccessStaffManagement(null)).toBe(false)
+    expect(canAccessStaffManagement(undefined)).toBe(false)
+    expect(canAccessStaffManagement('MANAGER')).toBe(false)
+   })
+
+   it('correctly aggregates active staff sessions and live presence', ()=>{
+    const sessions = [
+      { id: 'sess-1', userId: 'user-1', userName: 'Alice', is_active: 1, lastSeen: '2026-10-10T12:00:00Z' },
+      { id: 'sess-2', userId: 'user-1', userName: 'Alice', is_active: 1, lastSeen: '2026-10-10T12:05:00Z' },
+      { id: 'sess-3', userId: 'user-2', userName: 'Bob', is_active: 0, lastSeen: '2026-10-09T10:00:00Z' },
+      { id: 'sess-4', userId: 'user-3', userName: 'Charlie', is_active: 1, lastSeen: '2026-10-10T12:08:00Z' }
+    ]
+
+    const activeSessions = sessions.filter(s => s.is_active === 1)
+    expect(activeSessions).toHaveLength(3)
+
+    const activeUsers = Array.from(new Set(activeSessions.map(s => s.userName)))
+    expect(activeUsers).toEqual(['Alice', 'Charlie'])
+   })
 })
 

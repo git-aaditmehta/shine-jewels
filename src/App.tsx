@@ -30,7 +30,7 @@ import { login, workerApi } from './api'
 import { cloudImageStorageBytes, initialDownload, push, recoverMissingImages, synchronize, uploadPendingProductImages } from './sync'
 import { createOrderPdfBlob, downloadPdfBlob, sharePdfFile, type GeneratedPdfResult } from './pdf'
 import { storage } from './storage'
-import type { Category, DeviceSession, Order, Product, Session, Subcategory, Vendor, VendorRepresentative } from './types'
+import type { Category, DeviceSession, Order, Product, Session, StaffUser, Subcategory, Vendor, VendorRepresentative } from './types'
 import { BatchEntry, ProductEntry, Taxonomy } from './Management'
 import { EditProductModal, ArchiveConfirmModal } from './ProductModals'
 import { EditVendorModal, ArchiveVendorModal } from './VendorModals'
@@ -127,7 +127,19 @@ export function App(){
  const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number|'';remark:string}>>({}),[vendorId,setVendorId]=useState(''),[vendorRepresentatives,setVendorRepresentatives]=useState<VendorRepresentative[]>([{name:'',phone:''}]),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[pdfPreview,setPdfPreview]=useState<GeneratedPdfResult|null>(null),[generatingPdf,setGeneratingPdf]=useState(false),[bytes,setBytes]=useState(0),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<DeviceSession[]>([])
  const [editingProduct,setEditingProduct]=useState<Product|null>(null),[archivingProduct,setArchivingProduct]=useState<Product|null>(null),[archivedProductsList,setArchivedProductsList]=useState<Product[]>([]),[adminProductTab,setAdminProductTab]=useState<'active'|'add'|'archived'>('active'),[adminSearch,setAdminSearch]=useState('')
  const [archivedVendorsList,setArchivedVendorsList]=useState<Vendor[]>([]),[archivedCategoriesList,setArchivedCategoriesList]=useState<Category[]>([]),[archivedSubcategoriesList,setArchivedSubcategoriesList]=useState<Subcategory[]>([])
- const [editingVendor,setEditingVendor]=useState<Vendor|null>(null),[archivingVendor,setArchivingVendor]=useState<Vendor|null>(null),[adminVendorTab,setAdminVendorTab]=useState<'active'|'add'|'archived'>('active'),[vendorSearch,setVendorSearch]=useState(''),[adminDeviceTab,setAdminDeviceTab]=useState<'active'|'all'>('active')
+ const [editingVendor,setEditingVendor]=useState<Vendor|null>(null),[archivingVendor,setArchivingVendor]=useState<Vendor|null>(null),[adminVendorTab,setAdminVendorTab]=useState<'active'|'add'|'archived'>('active'),[vendorSearch,setVendorSearch]=useState(''),[adminDeviceTab,setAdminDeviceTab]=useState<'active'|'staff'|'add_staff'|'all'>('active')
+ const [staffList,setStaffList]=useState<StaffUser[]>([])
+ const [staffLoading,setStaffLoading]=useState(false)
+ const [newStaffUsername,setNewStaffUsername]=useState('')
+ const [newStaffPassword,setNewStaffPassword]=useState('')
+ const [newStaffDisplayName,setNewStaffDisplayName]=useState('')
+ const [showStaffPassword,setShowStaffPassword]=useState(false)
+ const [createdStaffCreds,setCreatedStaffCreds]=useState<{username:string;password:string;displayName:string}|null>(null)
+ const [staffActionSubmitting,setStaffActionSubmitting]=useState(false)
+ const [staffSearchQuery,setStaffSearchQuery]=useState('')
+ const [resetPasswordStaff,setResetPasswordStaff]=useState<StaffUser|null>(null)
+ const [newResetPasswordValue,setNewResetPasswordValue]=useState('')
+ const [showResetPasswordInput,setShowResetPasswordInput]=useState(false)
  const [visibleCount,setVisibleCount]=useState<number>(INITIAL_BATCH_SIZE)
  const sentinelRef=useRef<HTMLDivElement|null>(null)
  const [resolvedDetailUrl,setResolvedDetailUrl]=useState<string>('')
@@ -238,6 +250,12 @@ export function App(){
   const loadDevices=async()=>{const token=getStoredToken();if(!token)return;try{const list=await workerApi<DeviceSession[]>('/devices',{token});setDevices(list)}catch(err){setNotice(err instanceof Error?err.message:'Unable to load devices')}}
   const revokeDevice=async(deviceId:string)=>{const token=getStoredToken();if(!token)return;try{await workerApi(`/devices/${deviceId}/revoke`,{method:'POST',token});setNotice('Device session revoked. Device will be logged out upon reconnect.');await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Unable to revoke device session')}}
   const deleteDevice=async(deviceId:string)=>{const token=getStoredToken();if(!token)return;try{await workerApi(`/devices/${deviceId}`,{method:'DELETE',token});setNotice('Device session removed.');await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Unable to remove device session')}}
+  const loadStaff=async()=>{const token=getStoredToken();if(!token)return;setStaffLoading(true);try{const list=await workerApi<StaffUser[]>('/staff',{token});setStaffList(list)}catch(err){setNotice(err instanceof Error?err.message:'Unable to load staff members')}finally{setStaffLoading(false)}}
+  const generateStaffPassword=()=>{const words=['Gems','Diamond','Gold','Crown','Sparkle','Shine','Jewel','Emerald'];const w=words[Math.floor(Math.random()*words.length)];const num=Math.floor(1000+Math.random()*9000);return `${w}@${num}`}
+  const handleCreateStaff=async(e:React.FormEvent)=>{e.preventDefault();const token=getStoredToken();if(!token)return;const uname=newStaffUsername.trim(),pwd=newStaffPassword.trim(),dname=newStaffDisplayName.trim()||uname;if(uname.length<3){setNotice('Staff username must be at least 3 characters.');return}if(pwd.length<4){setNotice('Staff password must be at least 4 characters.');return}setStaffActionSubmitting(true);try{const res=await workerApi<StaffUser>('/staff',{method:'POST',token,body:{username:uname,password:pwd,displayName:dname}});setCreatedStaffCreds({username:res.username,password:pwd,displayName:res.display_name||dname});setNewStaffUsername('');setNewStaffPassword('');setNewStaffDisplayName('');setNotice(`Staff account "@${res.username}" created successfully.`);await loadStaff()}catch(err){setNotice(err instanceof Error?err.message:'Failed to create staff account')}finally{setStaffActionSubmitting(false)}}
+  const handleToggleStaffActive=async(staffId:string)=>{const token=getStoredToken();if(!token)return;try{const res=await workerApi<{id:string;is_active:number}>(`/staff/${staffId}/toggle-active`,{method:'POST',token});setNotice(res.is_active===1?'Staff account activated.':'Staff account suspended and active sessions revoked.');await loadStaff();await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Failed to update staff status')}}
+  const handleResetStaffPassword=async(e:React.FormEvent)=>{e.preventDefault();if(!resetPasswordStaff)return;const token=getStoredToken();if(!token)return;if(newResetPasswordValue.trim().length<4){setNotice('New password must be at least 4 characters.');return}setStaffActionSubmitting(true);try{await workerApi(`/staff/${resetPasswordStaff.id}/reset-password`,{method:'POST',token,body:{password:newResetPasswordValue.trim()}});setNotice(`Password updated successfully for @${resetPasswordStaff.username}.`);setResetPasswordStaff(null);setNewResetPasswordValue('')}catch(err){setNotice(err instanceof Error?err.message:'Failed to reset password')}finally{setStaffActionSubmitting(false)}}
+  const handleDeleteStaff=async(staff:StaffUser)=>{if(!window.confirm(`Are you sure you want to permanently remove staff account "@${staff.username}"? Any active sessions will be terminated.`)){return}const token=getStoredToken();if(!token)return;try{await workerApi(`/staff/${staff.id}`,{method:'DELETE',token});setNotice(`Staff account "@${staff.username}" removed.`);await loadStaff();await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Failed to remove staff account')}}
   const triggerSync=async()=>{const token=getStoredToken();if(!token||syncing||!navigator.onLine)return;setSyncing(true);try{const res=await synchronize(token,msg=>setNotice(msg));await load();await loadCloudStorage();setNotice(res.synced?`Sync complete: ${res.uploaded} uploaded, ${res.pulled} change(s) synced.`:'Device is offline.')}catch(err){setNotice(err instanceof Error?`Sync failed: ${err.message}`:'Sync failed.')}finally{setSyncing(false)}}
   const triggerImageRecovery=async()=>{const token=getStoredToken();if(!token||recovering||!navigator.onLine)return;setRecovering(true);try{const res=await recoverMissingImages(token,msg=>setNotice(msg));await load();setNotice(`Recovery complete: ${res.recovered} restored, ${res.failed} unavailable.`)}catch(err){setNotice(err instanceof Error?`Recovery failed: ${err.message}`:'Recovery failed.')}finally{setRecovering(false)}}
   const uploadImages=async()=>{const token=getStoredToken();if(!token||uploading)return;setUploading(true);try{const result=await uploadPendingProductImages(token);await load();await loadCloudStorage();setNotice(result.failed?`${result.uploaded} product image upload(s) completed; ${result.failed} remain queued.`:`${result.uploaded} product image upload(s) completed to R2.`)}catch(error){setNotice(error instanceof Error?`Image upload failed: ${error.message}`:'Image upload failed. Local images remain intact.')}finally{setUploading(false)}}
@@ -247,7 +265,7 @@ export function App(){
     const init=async()=>{
       const p=await load();
       void loadCloudStorage();
-      if(session.role==='ADMIN')void loadDevices();
+      if(session.role==='ADMIN'){void loadDevices();void loadStaff()}
       const token=getStoredToken();
       if(token&&navigator.onLine){
         if(p.length===0){
@@ -273,6 +291,7 @@ export function App(){
   },[session])
   useEffect(()=>{const onOnline=()=>{setOnline(true);void triggerSync()};const onOffline=()=>{setOnline(false)};window.addEventListener('online',onOnline);window.addEventListener('offline',onOffline);return ()=>{window.removeEventListener('online',onOnline);window.removeEventListener('offline',onOffline)}},[session])
   useEffect(()=>{if(view==='history'&&online){void triggerSync()}},[view,online])
+  useEffect(()=>{if(view==='devices'&&session?.role==='ADMIN'){void loadDevices();void loadStaff()}},[view,session?.role])
  const toggle=(id:string)=>setSelected(x=>x[id]?Object.fromEntries(Object.entries(x).filter(([k])=>k!==id)):{...x,[id]:{quantity:'',remark:''}})
  const change=(id:string,key:'quantity'|'remark',value:string)=>setSelected(s=>({...s,[id]:{...s[id], [key]:key==='quantity'?(value===''? '':Math.max(1,parseInt(value,10)||1)):value}}))
  const makeOrder=async()=>{const vendor=vendors.find(v=>v.id===vendorId);const picks=products.filter(p=>selected[p.id]);if(!vendor){setNotice('Select a vendor before reviewing the order.');return}if(!picks.length){setNotice('Select at least one design.');return};const max=Math.max(0,...orders.map(o=>o.orderNumber||0));const cleanedReps=vendorRepresentatives.map(r=>({name:r.name.trim(),phone:r.phone.trim()})).filter(r=>r.name||r.phone);const order:Order={id:uid(),orderNumber:max+1,vendor,representatives:cleanedReps.length?cleanedReps:undefined,salesperson:session?.displayName||'Salesperson',status:'FINALIZED',createdAt:new Date().toISOString(),generatedAt:new Date().toISOString(),items:picks.map((p,index)=>({productId:p.id,serialNumber:index+1,designCode:p.designCode,category:categories.find(c=>c.id===p.categoryId)?.name||'',subcategory:subcategories.find(s=>s.id===p.subcategoryId)?.name||'',weightMg:p.weightMg,quantity:Number(selected[p.id].quantity)||1,remark:selected[p.id].remark,image:p.gridImage}))};await storage.saveOrder(order);setOrders(o=>[order,...o]);setSelected({});setVendorRepresentatives([{name:'',phone:''}]);await load();setNotice(`Order #${order.orderNumber} finalized. Generating PDF preview…`);setGeneratingPdf(true);try{const res=await createOrderPdfBlob(order);setPdfPreview(res);setNotice(`Order #${order.orderNumber} PDF preview is ready.`)}catch(err){setNotice(err instanceof Error?`PDF generation failed: ${err.message}`:'PDF generation failed.')}finally{setGeneratingPdf(false)}}
@@ -988,11 +1007,11 @@ export function App(){
   <main className="single-view">
    <div className="section-title">
     <div>
-     <p className="eyebrow">security &amp; administration</p>
-     <h1>Authorized Device Sessions</h1>
+     <p className="eyebrow">security &amp; staff administration</p>
+     <h1>Authorized Devices &amp; Staff Access</h1>
     </div>
     <span>
-     {devices.filter(d=>!d.revoked_at && new Date(d.offline_authorization_expires_at) > new Date()).length} active · {devices.length} total
+     {devices.filter(d=>!d.revoked_at && new Date(d.offline_authorization_expires_at) > new Date()).length} active device(s) · {staffList.length} staff member(s)
     </span>
    </div>
 
@@ -1002,7 +1021,21 @@ export function App(){
      className={`catalogue-admin-tab ${adminDeviceTab==='active'?'active':''}`}
      onClick={()=>setAdminDeviceTab('active')}
     >
-     Active Devices <span className="admin-badge">{devices.filter(d=>!d.revoked_at && new Date(d.offline_authorization_expires_at) > new Date()).length}</span>
+     Active Staff &amp; Devices <span className="admin-badge">{devices.filter(d=>!d.revoked_at && new Date(d.offline_authorization_expires_at) > new Date()).length}</span>
+    </button>
+    <button
+     type="button"
+     className={`catalogue-admin-tab ${adminDeviceTab==='staff'?'active':''}`}
+     onClick={()=>setAdminDeviceTab('staff')}
+    >
+     Staff Accounts <span className="admin-badge">{staffList.length}</span>
+    </button>
+    <button
+     type="button"
+     className={`catalogue-admin-tab ${adminDeviceTab==='add_staff'?'active':''}`}
+     onClick={()=>setAdminDeviceTab('add_staff')}
+    >
+     + Add Staff Account
     </button>
     <button
      type="button"
@@ -1013,97 +1046,409 @@ export function App(){
     </button>
    </div>
 
-   <div className="admin-card-list">
-    {(() => {
-     const filteredDevices = adminDeviceTab === 'active'
-       ? devices.filter(d => !d.revoked_at && new Date(d.offline_authorization_expires_at) > new Date())
-       : devices
-
-     if (!filteredDevices.length) {
-       return (
-         <p className="muted" style={{ padding: '24px 0' }}>
-           {adminDeviceTab === 'active' ? 'No active device sessions found.' : 'No device sessions recorded yet.'}
-         </p>
-       )
-     }
-
-     return filteredDevices.map(d => {
-       const lastSeenMs = Date.now() - new Date(d.last_seen_at).getTime()
-       const isOnlineRecent = lastSeenMs < 24 * 60 * 60 * 1000
-       const isIdleRecent = lastSeenMs < 7 * 24 * 60 * 60 * 1000
-       const isExpired = new Date(d.offline_authorization_expires_at) <= new Date()
-
-       let statusClass = 'inactive'
-       let statusLabel = 'Inactive'
-
-       if (d.revoked_at) {
-         statusClass = 'revoked'
-         statusLabel = 'Revoked'
-       } else if (isExpired) {
-         statusClass = 'revoked'
-         statusLabel = 'Expired'
-       } else if (isOnlineRecent) {
-         statusClass = 'active'
-         statusLabel = 'Active Recently'
-       } else if (isIdleRecent) {
-         statusClass = 'idle'
-         statusLabel = 'Idle'
-       }
-
-       const accountDisplay = d.display_name || d.username || 'User'
-       const usernameDisplay = d.username ? `@${d.username}` : ''
-
-       return (
-         <div className={`device-card ${d.revoked_at ? 'revoked' : ''}`} key={d.id}>
-          <div className="device-card-left">
-           <div className="device-card-top">
-            <span className="device-card-name">📱 {d.device_name}</span>
-            <span className="device-card-user">
-             👤 {accountDisplay} {usernameDisplay && <small style={{ opacity: 0.8 }}>({usernameDisplay})</small>}
-            </span>
-            <span className={`device-status-badge ${statusClass}`}>
-             <i className="device-status-dot" /> {statusLabel}
-            </span>
+   {adminDeviceTab === 'add_staff' && (
+     <div className="staff-create-container">
+       {createdStaffCreds ? (
+         <div className="staff-creds-callout">
+           <h3>✅ Staff Account Created Successfully!</h3>
+           <p style={{ margin: 0, fontSize: '13px' }}>Share these credentials with the staff member so they can sign into the application:</p>
+           <div className="staff-creds-box">
+             <div className="staff-creds-row"><span>Organization ID:</span> <code>{session.organizationId}</code></div>
+             <div className="staff-creds-row"><span>Staff Name:</span> <strong>{createdStaffCreds.displayName}</strong></div>
+             <div className="staff-creds-row"><span>Staff Username:</span> <code>{createdStaffCreds.username}</code></div>
+             <div className="staff-creds-row"><span>Staff Password:</span> <code>{createdStaffCreds.password}</code></div>
            </div>
-           <div className="device-card-meta">
-            <span>Device ID: <code style={{ fontSize: '11px' }}>{d.device_id.slice(0, 13)}…</code></span>
-            <span>Last seen: {new Date(d.last_seen_at).toLocaleString()}</span>
-            <span>Expires: {new Date(d.offline_authorization_expires_at).toLocaleDateString()}</span>
-            {d.revoked_at && (
-             <span style={{ color: 'var(--danger)', fontWeight: 700 }}>
-              Revoked on {new Date(d.revoked_at).toLocaleString()}
-             </span>
-            )}
+           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+             <button
+               type="button"
+               className="primary"
+               style={{ width: 'auto', minHeight: '38px', padding: '0 16px', marginTop: 0 }}
+               onClick={() => {
+                 const text = `Shine Jewels Sign-In Details:\nOrganization ID: ${session.organizationId}\nUsername: ${createdStaffCreds.username}\nPassword: ${createdStaffCreds.password}`
+                 void navigator.clipboard.writeText(text)
+                 setNotice('Sign-in details copied to clipboard!')
+               }}
+             >
+               📋 Copy Login Details
+             </button>
+             <button
+               type="button"
+               className="quiet"
+               style={{ minHeight: '38px', padding: '0 14px' }}
+               onClick={() => setCreatedStaffCreds(null)}
+             >
+               + Create Another Staff Member
+             </button>
+             <button
+               type="button"
+               className="quiet"
+               style={{ minHeight: '38px', padding: '0 14px' }}
+               onClick={() => { setCreatedStaffCreds(null); setAdminDeviceTab('staff') }}
+             >
+               View All Staff Accounts
+             </button>
            </div>
-          </div>
-          <div className="device-card-actions">
-           {!d.revoked_at && !isExpired && (
-            <button
-             type="button"
-             className="quiet"
-             style={{ color: 'var(--danger)', borderColor: 'var(--danger)', fontSize: '12px', minHeight: '34px' }}
-             onClick={() => void revokeDevice(d.id)}
-            >
-             Revoke access
-            </button>
-           )}
-           <button
-            type="button"
-            className="quiet"
-            style={{ color: 'var(--muted)', fontSize: '12px', minHeight: '34px', padding: '0 8px' }}
-            title="Remove session record from database"
-            onClick={() => void deleteDevice(d.id)}
-           >
-            🗑️ Remove
-           </button>
-          </div>
          </div>
-       )
-     })
-    })()}
-   </div>
+       ) : (
+         <form className="staff-create-form" onSubmit={handleCreateStaff}>
+           <div className="staff-create-header">
+             <h2>Create New Staff Account</h2>
+             <p>Staff accounts receive Salesperson permissions. Staff can browse catalogue, take orders, and use offline mode.</p>
+           </div>
+           <label>
+             Organization ID (Preset)
+             <input type="text" value={session.organizationId} readOnly className="immutable-input" />
+             <small className="field-hint">Staff will enter this Organization ID on the sign-in screen.</small>
+           </label>
+           <label>
+             Staff Full / Display Name
+             <input
+               type="text"
+               value={newStaffDisplayName}
+               onChange={e => setNewStaffDisplayName(e.target.value)}
+               placeholder="e.g. Rahul Sharma"
+               autoComplete="off"
+             />
+           </label>
+           <label>
+             Staff Username <span style={{ color: 'var(--danger)' }}>*</span>
+             <input
+               type="text"
+               value={newStaffUsername}
+               onChange={e => setNewStaffUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_.-]/g, ''))}
+               placeholder="e.g. rahul_sales"
+               required
+               autoComplete="off"
+             />
+             <small className="field-hint">Must be at least 3 characters. Alphanumeric, lowercase, underscores allowed.</small>
+           </label>
+           <label>
+             Staff Password <span style={{ color: 'var(--danger)' }}>*</span>
+             <div className="staff-password-wrapper">
+               <input
+                 type={showStaffPassword ? 'text' : 'password'}
+                 value={newStaffPassword}
+                 onChange={e => setNewStaffPassword(e.target.value)}
+                 placeholder="Min 4 characters"
+                 required
+                 autoComplete="new-password"
+               />
+               <button
+                 type="button"
+                 className="staff-password-toggle"
+                 onClick={() => setShowStaffPassword(p => !p)}
+               >
+                 {showStaffPassword ? 'Hide' : 'Show'}
+               </button>
+             </div>
+             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
+               <button
+                 type="button"
+                 className="quiet"
+                 style={{ minHeight: '28px', padding: '0 10px', fontSize: '12px' }}
+                 onClick={() => {
+                   const pwd = generateStaffPassword()
+                   setNewStaffPassword(pwd)
+                   setShowStaffPassword(true)
+                 }}
+               >
+                 ⚡ Generate Strong Password
+               </button>
+             </div>
+           </label>
+           <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+             <button type="submit" className="primary" disabled={staffActionSubmitting} style={{ marginTop: 0 }}>
+               {staffActionSubmitting ? 'Creating Staff Account…' : 'Create Staff Account'}
+             </button>
+             <button
+               type="button"
+               className="quiet"
+               onClick={() => setAdminDeviceTab('staff')}
+             >
+               Cancel
+             </button>
+           </div>
+         </form>
+       )}
+     </div>
+   )}
+
+   {adminDeviceTab === 'staff' && (
+     <div>
+       <div className="staff-action-bar">
+         <input
+           type="search"
+           className="staff-search-input"
+           placeholder="Search staff by name or @username…"
+           value={staffSearchQuery}
+           onChange={e => setStaffSearchQuery(e.target.value)}
+         />
+         <button
+           type="button"
+           className="quiet"
+           style={{ fontWeight: 700 }}
+           onClick={() => setAdminDeviceTab('add_staff')}
+         >
+           + Create New Staff Member
+         </button>
+       </div>
+
+       <div className="admin-card-list">
+         {(() => {
+           const query = staffSearchQuery.trim().toLowerCase()
+           const filteredStaff = staffList.filter(s =>
+             !query ||
+             s.username.toLowerCase().includes(query) ||
+             s.display_name.toLowerCase().includes(query)
+           )
+
+           if (staffLoading) {
+             return <p className="muted" style={{ padding: '24px 0' }}>Loading staff accounts…</p>
+           }
+
+           if (!filteredStaff.length) {
+             return (
+               <div style={{ textAlign: 'center', padding: '40px 16px' }}>
+                 <p className="muted">
+                   {query ? 'No staff members match your search.' : 'No staff accounts created yet.'}
+                 </p>
+                 {!query && (
+                   <button
+                     type="button"
+                     className="primary"
+                     style={{ maxWidth: '240px', margin: '16px auto 0' }}
+                     onClick={() => setAdminDeviceTab('add_staff')}
+                   >
+                     + Create First Staff Account
+                   </button>
+                 )}
+               </div>
+             )
+           }
+
+           return filteredStaff.map(s => {
+             const activeCount = Number(s.active_device_count || 0)
+             const isStaffActive = s.is_active === 1
+             return (
+               <div className={`staff-card ${!isStaffActive ? 'suspended' : ''}`} key={s.id}>
+                 <div className="staff-card-left">
+                   <div className="staff-card-top">
+                     <span className="staff-card-name">👤 {s.display_name || s.username}</span>
+                     <span className="staff-card-username">@{s.username}</span>
+                     <span className={`device-status-badge ${isStaffActive ? 'active' : 'revoked'}`}>
+                       <i className="device-status-dot" /> {isStaffActive ? 'Active' : 'Suspended'}
+                     </span>
+                     <span style={{ fontSize: '11px', fontWeight: 700, color: activeCount > 0 ? 'var(--green)' : 'var(--muted)' }}>
+                       {activeCount > 0 ? `🟢 ${activeCount} active device(s)` : '⚪ No active devices'}
+                     </span>
+                   </div>
+                   <div className="staff-card-meta">
+                     <span>Created: {new Date(s.created_at).toLocaleDateString()}</span>
+                     <span>
+                       Last active: {s.last_active_at ? new Date(s.last_active_at).toLocaleString() : 'Never logged in'}
+                     </span>
+                   </div>
+                 </div>
+                 <div className="staff-card-actions">
+                   <button
+                     type="button"
+                     className="quiet"
+                     style={{ fontSize: '12px', minHeight: '34px', padding: '0 10px' }}
+                     onClick={() => {
+                       setResetPasswordStaff(s)
+                       setNewResetPasswordValue('')
+                       setShowResetPasswordInput(false)
+                     }}
+                   >
+                     🔑 Reset Password
+                   </button>
+                   <button
+                     type="button"
+                     className="quiet"
+                     style={{
+                       fontSize: '12px',
+                       minHeight: '34px',
+                       padding: '0 10px',
+                       color: isStaffActive ? 'var(--danger)' : 'var(--green)'
+                     }}
+                     onClick={() => void handleToggleStaffActive(s.id)}
+                   >
+                     {isStaffActive ? '⏸️ Suspend' : '▶️ Activate'}
+                   </button>
+                   <button
+                     type="button"
+                     className="quiet"
+                     style={{ fontSize: '12px', minHeight: '34px', padding: '0 8px', color: 'var(--muted)' }}
+                     title="Permanently remove staff account"
+                     onClick={() => void handleDeleteStaff(s)}
+                   >
+                     🗑️
+                   </button>
+                 </div>
+               </div>
+             )
+           })
+         })()}
+       </div>
+     </div>
+   )}
+
+   {(adminDeviceTab === 'active' || adminDeviceTab === 'all') && (
+     <div className="admin-card-list">
+       {(() => {
+         const filteredDevices = adminDeviceTab === 'active'
+           ? devices.filter(d => !d.revoked_at && new Date(d.offline_authorization_expires_at) > new Date())
+           : devices
+
+         if (!filteredDevices.length) {
+           return (
+             <p className="muted" style={{ padding: '24px 0' }}>
+               {adminDeviceTab === 'active' ? 'No active device sessions found.' : 'No device sessions recorded yet.'}
+             </p>
+           )
+         }
+
+         return filteredDevices.map(d => {
+           const lastSeenMs = Date.now() - new Date(d.last_seen_at).getTime()
+           const isOnlineRecent = lastSeenMs < 24 * 60 * 60 * 1000
+           const isIdleRecent = lastSeenMs < 7 * 24 * 60 * 60 * 1000
+           const isExpired = new Date(d.offline_authorization_expires_at) <= new Date()
+
+           let statusClass = 'inactive'
+           let statusLabel = 'Inactive'
+
+           if (d.revoked_at) {
+             statusClass = 'revoked'
+             statusLabel = 'Revoked'
+           } else if (isExpired) {
+             statusClass = 'revoked'
+             statusLabel = 'Expired'
+           } else if (isOnlineRecent) {
+             statusClass = 'active'
+             statusLabel = 'Active Recently'
+           } else if (isIdleRecent) {
+             statusClass = 'idle'
+             statusLabel = 'Idle'
+           }
+
+           const accountDisplay = d.display_name || d.username || 'User'
+           const usernameDisplay = d.username ? `@${d.username}` : ''
+           const roleLabel = d.role === 'ADMIN' ? 'Admin' : 'Staff'
+
+           return (
+             <div className={`device-card ${d.revoked_at ? 'revoked' : ''}`} key={d.id}>
+               <div className="device-card-left">
+                 <div className="device-card-top">
+                   <span className="device-card-name">📱 {d.device_name}</span>
+                   <span className="device-card-user">
+                     👤 {accountDisplay} {usernameDisplay && <small style={{ opacity: 0.8 }}>({usernameDisplay})</small>}
+                     <span className="admin-badge" style={{ fontSize: '10px', padding: '1px 5px', marginLeft: '4px' }}>{roleLabel}</span>
+                   </span>
+                   <span className={`device-status-badge ${statusClass}`}>
+                     <i className="device-status-dot" /> {statusLabel}
+                   </span>
+                 </div>
+                 <div className="device-card-meta">
+                   <span>Device ID: <code style={{ fontSize: '11px' }}>{d.device_id.slice(0, 13)}…</code></span>
+                   <span>Last seen: {new Date(d.last_seen_at).toLocaleString()}</span>
+                   <span>Expires: {new Date(d.offline_authorization_expires_at).toLocaleDateString()}</span>
+                   {d.revoked_at && (
+                     <span style={{ color: 'var(--danger)', fontWeight: 700 }}>
+                       Revoked on {new Date(d.revoked_at).toLocaleString()}
+                     </span>
+                   )}
+                 </div>
+               </div>
+               <div className="device-card-actions">
+                 {!d.revoked_at && !isExpired && (
+                   <button
+                     type="button"
+                     className="quiet"
+                     style={{ color: 'var(--danger)', borderColor: 'var(--danger)', fontSize: '12px', minHeight: '34px' }}
+                     onClick={() => void revokeDevice(d.id)}
+                   >
+                     Revoke access
+                   </button>
+                 )}
+                 <button
+                   type="button"
+                   className="quiet"
+                   style={{ color: 'var(--muted)', fontSize: '12px', minHeight: '34px', padding: '0 8px' }}
+                   title="Remove session record from database"
+                   onClick={() => void deleteDevice(d.id)}
+                 >
+                   🗑️ Remove
+                 </button>
+               </div>
+             </div>
+           )
+         })
+       })()}
+     </div>
+   )}
+
+   {resetPasswordStaff && (
+     <div className="product-modal-backdrop" onClick={() => setResetPasswordStaff(null)}>
+       <div className="product-modal-card" style={{ maxWidth: '460px' }} onClick={e => e.stopPropagation()}>
+         <div className="product-modal-header">
+           <div>
+             <h2>Reset Staff Password</h2>
+             <p className="muted" style={{ margin: '4px 0 0', fontSize: '13px' }}>
+               Set a new password for @{resetPasswordStaff.username} ({resetPasswordStaff.display_name}).
+             </p>
+           </div>
+           <button className="close" onClick={() => setResetPasswordStaff(null)} style={{ position: 'static' }}>×</button>
+         </div>
+         <form onSubmit={handleResetStaffPassword} style={{ padding: '20px', display: 'grid', gap: '14px' }}>
+           <label>
+             New Password <span style={{ color: 'var(--danger)' }}>*</span>
+             <div className="staff-password-wrapper">
+               <input
+                 type={showResetPasswordInput ? 'text' : 'password'}
+                 value={newResetPasswordValue}
+                 onChange={e => setNewResetPasswordValue(e.target.value)}
+                 placeholder="Min 4 characters"
+                 required
+                 autoFocus
+               />
+               <button
+                 type="button"
+                 className="staff-password-toggle"
+                 onClick={() => setShowResetPasswordInput(p => !p)}
+               >
+                 {showResetPasswordInput ? 'Hide' : 'Show'}
+               </button>
+             </div>
+             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
+               <button
+                 type="button"
+                 className="quiet"
+                 style={{ minHeight: '28px', padding: '0 10px', fontSize: '12px' }}
+                 onClick={() => {
+                   const pwd = generateStaffPassword()
+                   setNewResetPasswordValue(pwd)
+                   setShowResetPasswordInput(true)
+                 }}
+               >
+                 ⚡ Generate Strong Password
+               </button>
+             </div>
+           </label>
+           <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '12px' }}>
+             <button type="button" className="quiet" onClick={() => setResetPasswordStaff(null)}>
+               Cancel
+             </button>
+             <button type="submit" className="primary" disabled={staffActionSubmitting} style={{ width: 'auto', marginTop: 0 }}>
+               {staffActionSubmitting ? 'Updating…' : 'Update Password'}
+             </button>
+           </div>
+         </form>
+       </div>
+     </div>
+   )}
   </main>
  )}
+
   {detail && (
    <div
     className="modal"
