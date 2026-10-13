@@ -259,6 +259,30 @@ export function App(){
   const triggerSync=async()=>{const token=getStoredToken();if(!token||syncing||!navigator.onLine)return;setSyncing(true);try{const res=await synchronize(token,msg=>setNotice(msg));await load();await loadCloudStorage();setNotice(res.synced?`Sync complete: ${res.uploaded} uploaded, ${res.pulled} change(s) synced.`:'Device is offline.')}catch(err){setNotice(err instanceof Error?`Sync failed: ${err.message}`:'Sync failed.')}finally{setSyncing(false)}}
   const triggerImageRecovery=async()=>{const token=getStoredToken();if(!token||recovering||!navigator.onLine)return;setRecovering(true);try{const res=await recoverMissingImages(token,msg=>setNotice(msg));await load();setNotice(`Recovery complete: ${res.recovered} restored, ${res.failed} unavailable.`)}catch(err){setNotice(err instanceof Error?`Recovery failed: ${err.message}`:'Recovery failed.')}finally{setRecovering(false)}}
   const uploadImages=async()=>{const token=getStoredToken();if(!token||uploading)return;setUploading(true);try{const result=await uploadPendingProductImages(token);await load();await loadCloudStorage();setNotice(result.failed?`${result.uploaded} product image upload(s) completed; ${result.failed} remain queued.`:`${result.uploaded} product image upload(s) completed to R2.`)}catch(error){setNotice(error instanceof Error?`Image upload failed: ${error.message}`:'Image upload failed. Local images remain intact.')}finally{setUploading(false)}}
+  const handleResetLocalData=async()=>{
+    const confirmed=window.confirm(
+      '⚠️ Reset Local Device Data?\n\n' +
+      'This will wipe all local test products, categories, vendors, and orders stored in this device\'s offline cache.\n\n' +
+      '• Your Admin login and organization session will NOT be deleted.\n' +
+      '• You will remain logged in.\n\n' +
+      'Do you want to proceed?'
+    )
+    if(!confirmed)return
+    try{
+      setNotice('Wiping local device catalogue cache…')
+      await storage.resetLocalData()
+      if('caches' in window){
+        const k=await caches.keys()
+        await Promise.all(k.map(n=>caches.delete(n)))
+      }
+      setNotice('✅ Local device data reset successfully! Admin session intact. Reloading…')
+      setTimeout(()=>{
+        window.location.reload()
+      },700)
+    }catch(err){
+      setNotice(`Reset failed: ${err instanceof Error?err.message:'Unknown error'}`)
+    }
+  }
   useEffect(()=>{
     if(!session)return;
     let active=true;
@@ -1002,7 +1026,7 @@ export function App(){
     </div>
    </main>
   )}
- {view==='storage'&&<main className="single-view storage"><div className="section-title"><div><p className="eyebrow">device replica</p><h1>Storage &amp; synchronization</h1></div><span>Checkpoint #{syncCheckpointVal}</span></div><div className="storage-card"><strong>{cloudBytes===null?'—':(cloudBytes/(1024*1024)).toFixed(2)+' MB'}</strong><span>Cloud R2 catalogue images</span><p>Calculated from the authenticated organization’s confirmed grid/detail image metadata. This is the cloud catalogue total, not a browser cache estimate.</p><strong>{(bytes/(1024*1024)).toFixed(2)} MB</strong><span>This device’s OPFS image replica</span><p>Images saved while working offline are counted here separately and remain on this device until explicitly cleared.</p><div style={{display:'flex',gap:'10px',alignItems:'center',padding:'8px 0'}}><span>Offline queue:</span><strong>{pendingCount} operation(s) pending sync</strong>{pendingCount>0&&<button className="quiet" style={{minHeight:'28px',padding:'0 8px',fontSize:'12px'}} onClick={async()=>{await storage.clearPendingOperations();await load();setNotice('Pending operations queue cleared.')}}>Clear queue</button>}</div><button className="primary" disabled={syncing||!online} onClick={()=>void triggerSync()}>{syncing?'Synchronizing…':'Run Full Synchronization'}</button><button className="quiet" disabled={recovering||!online} onClick={()=>void triggerImageRecovery()}>{recovering?'Recovering images…':'Scan & Recover Missing Images'}</button><button className="quiet" disabled={uploading||!online} onClick={()=>void uploadImages()}>{uploading?'Uploading pending images…':'Upload pending product images'}</button><button className="quiet" onClick={()=>{void load();void loadCloudStorage()}}>Refresh storage estimate</button><button className="quiet" style={{marginTop:'4px'}} onClick={async()=>{if('caches' in window){const k=await caches.keys();await Promise.all(k.map(n=>caches.delete(n)))};if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()))};window.location.reload()}}>Force Reload &amp; Update App</button></div></main>}
+  {view==='storage'&&<main className="single-view storage"><div className="section-title"><div><p className="eyebrow">device replica</p><h1>Storage &amp; synchronization</h1></div><span>Checkpoint #{syncCheckpointVal}</span></div><div className="storage-card"><strong>{cloudBytes===null?'—':(cloudBytes/(1024*1024)).toFixed(2)+' MB'}</strong><span>Cloud R2 catalogue images</span><p>Calculated from the authenticated organization’s confirmed grid/detail image metadata. This is the cloud catalogue total, not a browser cache estimate.</p><strong>{(bytes/(1024*1024)).toFixed(2)} MB</strong><span>This device’s OPFS image replica</span><p>Images saved while working offline are counted here separately and remain on this device until explicitly cleared.</p><div style={{display:'flex',gap:'10px',alignItems:'center',padding:'8px 0'}}><span>Offline queue:</span><strong>{pendingCount} operation(s) pending sync</strong>{pendingCount>0&&<button className="quiet" style={{minHeight:'28px',padding:'0 8px',fontSize:'12px'}} onClick={async()=>{await storage.clearPendingOperations();await load();setNotice('Pending operations queue cleared.')}}>Clear queue</button>}</div><button className="primary" disabled={syncing||!online} onClick={()=>void triggerSync()}>{syncing?'Synchronizing…':'Run Full Synchronization'}</button><button className="quiet" disabled={recovering||!online} onClick={()=>void triggerImageRecovery()}>{recovering?'Recovering images…':'Scan & Recover Missing Images'}</button><button className="quiet" disabled={uploading||!online} onClick={()=>void uploadImages()}>{uploading?'Uploading pending images…':'Upload pending product images'}</button><button className="quiet" onClick={()=>{void load();void loadCloudStorage()}}>Refresh storage estimate</button><button className="quiet" style={{marginTop:'4px'}} onClick={async()=>{if('caches' in window){const k=await caches.keys();await Promise.all(k.map(n=>caches.delete(n)))};if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()))};window.location.reload()}}>Force Reload &amp; Update App</button><div style={{marginTop:'20px',paddingTop:'16px',borderTop:'1px dashed var(--danger,#983b32)'}}><strong style={{color:'var(--danger,#983b32)',fontSize:'13px',display:'block',marginBottom:'4px'}}>⚠️ Clean Handover Tool (Temporary)</strong><p style={{fontSize:'12px',color:'var(--muted)',margin:'0 0 10px'}}>Wipes all local test products, categories, vendors, and orders cached on this device so the client starts completely fresh. <strong>Your Admin login session is preserved.</strong></p><button type="button" className="quiet" style={{minHeight:'42px',width:'100%',color:'#fff',background:'var(--danger,#983b32)',borderColor:'var(--danger,#983b32)',fontWeight:700,fontSize:'13px',borderRadius:'8px'}} onClick={handleResetLocalData}>🗑️ Wipe Local Device Data (Keep Admin Logged In)</button></div></div></main>}
  {view==='devices'&&session.role==='ADMIN'&&(
   <main className="single-view">
    <div className="section-title">

@@ -52,6 +52,7 @@ export interface CatalogueStorage {
   applyRemoteChange(x: { entityType: string; entityId: string; operation: string; payload: unknown }): Promise<void>
   cacheRemoteImage(productId: string, representation: 'grid' | 'detail', url: string, version: number, expectedChecksum?: string, expectedSize?: number): Promise<void>
   resolveDetailImage(product: Product): Promise<string>
+  resetLocalData(): Promise<void>
 }
 class SqliteOpfsStorage implements CatalogueStorage {
  private db=new LocalSqlite();private ready=this.bootstrap()
@@ -561,6 +562,30 @@ class SqliteOpfsStorage implements CatalogueStorage {
    const product=JSON.parse(record.payload) as Product
    await this.save('product',productId,{...product,[representation==='grid'?'gridImage':'detailImage']:path})
   }
+ }
+ async resetLocalData(): Promise<void> {
+  await this.ready
+  await this.db.execute("DELETE FROM local_entities WHERE entity_type != 'offline-authorization'")
+  await this.db.execute("DELETE FROM pending_operations")
+  await this.db.execute("DELETE FROM local_image_metadata")
+  await this.db.execute("DELETE FROM storage_accounting")
+  await this.db.setCheckpoint('sync_checkpoint', '0')
+  this.imageMemoryCache.clear()
+  try {
+   const storageObj = (navigator as unknown as { storage?: { getDirectory?: () => Promise<FileSystemDirectoryHandle> } }).storage
+   if (storageObj && typeof storageObj.getDirectory === 'function') {
+    const root = await storageObj.getDirectory()
+    try {
+     const imagesHandle = await root.getDirectoryHandle('shine-jewels-images', { create: false })
+     // @ts-expect-error entries() iteration
+     for await (const [name] of imagesHandle.entries()) {
+      try {
+       await imagesHandle.removeEntry(name)
+      } catch { /* ignore individual removal */ }
+     }
+    } catch { /* folder might not exist */ }
+   }
+  } catch { /* ignore OPFS errors */ }
  }
 }
 export const storage:CatalogueStorage=new SqliteOpfsStorage()
