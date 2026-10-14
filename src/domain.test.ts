@@ -347,6 +347,18 @@ describe('business invariant helpers',()=>{
     const totalWeight = [p1, p2].reduce((sum, p) => sum + p.weightMg * (Number(selected[p.id].quantity) || 1), 0)
     expect(totalWeight).toBe(5200 * 2 + 14000 * 1) // 24400 mg = 24.400 g
    })
+
+   it('identifies products with missing offline detail image assets for auto-sync', ()=>{
+    const products = [
+      { id: 'p1', designCode: 'SJ-101', detailImageKey: 'org/products/p1/detail', imageVersion: 1 },
+      { id: 'p2', designCode: 'SJ-102', detailImageKey: 'org/products/p2/detail', imageVersion: 1 },
+      { id: 'p3', designCode: 'SJ-103', detailImageKey: undefined, imageVersion: 1 }
+    ]
+    const localCached = new Set(['p1-detail-v1'])
+    const missing = products.filter(p => p.detailImageKey && !localCached.has(`${p.id}-detail-v${p.imageVersion}`))
+    expect(missing).toHaveLength(1)
+    expect(missing[0].designCode).toBe('SJ-102')
+   })
 })
 
 

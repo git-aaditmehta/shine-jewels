@@ -322,7 +322,7 @@ export async function initialDownload(token: string, onProgress?: (msg: string) 
     await storage.applyRemoteChange({ entityType: 'product', entityId: String(x.id), operation: x.deleted_at ? 'ARCHIVE' : 'CREATE', payload: p })
   }
 
-  // Pre-cache grid images into local OPFS with SHA-256 verification
+  // Pre-cache both grid thumbnails and high-res detail images into local OPFS with SHA-256 verification
   for (const x of activeProducts) {
     count++
     const p = productFromRecord(x)
@@ -330,11 +330,23 @@ export async function initialDownload(token: string, onProgress?: (msg: string) 
       const gridLocalPath = `${p.id}-grid-v${p.imageVersion}`
       const exists = await storage.hasImage(gridLocalPath)
       if (!exists) {
-        onProgress?.(`Caching images (${count}/${activeProducts.length}): ${p.designCode}`)
+        onProgress?.(`Caching thumbnails (${count}/${activeProducts.length}): ${p.designCode}`)
         try {
           await storage.cacheRemoteImage(p.id, 'grid', p.gridImage, p.imageVersion, p.gridImageChecksum, p.gridImageSizeBytes)
         } catch (e) {
           console.warn(`Grid pre-cache failed for ${p.designCode}:`, e)
+        }
+      }
+    }
+    if (p.detailImageKey) {
+      const detailLocalPath = `${p.id}-detail-v${p.imageVersion}`
+      const exists = await storage.hasImage(detailLocalPath)
+      if (!exists) {
+        onProgress?.(`Caching high-res offline details (${count}/${activeProducts.length}): ${p.designCode}`)
+        try {
+          await storage.cacheRemoteImage(p.id, 'detail', p.detailImage, p.imageVersion, p.detailImageChecksum, p.detailImageSizeBytes)
+        } catch (e) {
+          console.warn(`Detail pre-cache failed for ${p.designCode}:`, e)
         }
       }
     }
@@ -400,6 +412,16 @@ export async function synchronize(token: string, onProgress?: (msg: string) => v
             }
           }
         }
+        if (p.detailImageKey) {
+          const detailLocalPath = `${p.id}-detail-v${p.imageVersion}`
+          if (!(await storage.hasImage(detailLocalPath))) {
+            try {
+              await storage.cacheRemoteImage(p.id, 'detail', p.detailImage, p.imageVersion, p.detailImageChecksum, p.detailImageSizeBytes)
+            } catch (err) {
+              console.warn(`Incremental detail cache failed for ${p.designCode}:`, err)
+            }
+          }
+        }
       } else if (change.entity_type === 'category') {
         await storage.applyRemoteChange({ entityType: 'category', entityId: change.entity_id, operation: change.operation, payload: category(parsed) })
       } else if (change.entity_type === 'subcategory') {
@@ -415,6 +437,33 @@ export async function synchronize(token: string, onProgress?: (msg: string) => v
 
   // 3. Ensure historical orders are synced
   await syncHistoryOrders(token)
+
+  // 4. Automatic background download: ensure all active products have high-res detail images cached offline
+  try {
+    const allProducts = await storage.products()
+    let cachedDetails = 0
+    for (const p of allProducts) {
+      if (p.deleted) continue
+      if (p.detailImageKey) {
+        const detailLocalPath = `${p.id}-detail-v${p.imageVersion}`
+        const hasDetail = await storage.hasImage(detailLocalPath)
+        if (!hasDetail) {
+          try {
+            onProgress?.(`Caching offline detail: ${p.designCode}...`)
+            await storage.cacheRemoteImage(p.id, 'detail', p.detailImage, p.imageVersion, p.detailImageChecksum, p.detailImageSizeBytes)
+            cachedDetails++
+          } catch (err) {
+            console.warn(`Auto detail caching failed for ${p.designCode}:`, err)
+          }
+        }
+      }
+    }
+    if (cachedDetails > 0) {
+      onProgress?.(`Synced ${cachedDetails} high-res detail image(s) for offline viewing.`)
+    }
+  } catch (err) {
+    console.warn('Auto detail caching check failed:', err)
+  }
 
   return { synced: true, uploaded, failed, pulled: changes.length }
 }

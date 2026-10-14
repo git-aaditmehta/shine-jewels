@@ -41,8 +41,8 @@ export async function processDualImages(file: File): Promise<{ gridImage: string
       return canvas.toDataURL('image/jpeg', quality)
     }
 
-    // Detail: up to 2200px at 0.88 quality (sharp retina brilliance, luxury zoom, optimized storage)
-    const detailImage = renderToDataUrl(2200, 0.88)
+    // Detail: up to 2000px at 0.88 quality (sharp retina brilliance, luxury zoom, optimized storage)
+    const detailImage = renderToDataUrl(2000, 0.88)
     // Grid: up to 600px at 0.85 quality (sharp retina thumbnail, memory safe)
     const gridImage = renderToDataUrl(600, 0.85)
 
