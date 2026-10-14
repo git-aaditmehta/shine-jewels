@@ -11,9 +11,9 @@ export interface FullscreenViewerProps {
   goNext: () => void
   onClose: () => void
   resolvedDetailUrl: string
-  selected: Record<string, { quantity: number | ''; remark: string; customWeightMg?: number }>
+  selected: Record<string, { quantity: number | ''; remark: string }>
   onToggle: (id: string) => void
-  onUpdateSelected: (id: string, updates: Partial<{ quantity: number | ''; remark: string; customWeightMg?: number }>) => void
+  onUpdateSelected: (id: string, updates: Partial<{ quantity: number | ''; remark: string }>) => void
   categories: Category[]
   subcategories: Subcategory[]
   grams: (mg: number) => string
@@ -62,18 +62,6 @@ export function FullscreenViewer({
   // Selected state for current detail item
   const selectedItem = selected[detail.id]
   const isSelected = Boolean(selectedItem)
-
-  // Effective weight calculation (custom weight in grams or original product grams)
-  const effectiveGrams = selectedItem?.customWeightMg !== undefined
-    ? grams(selectedItem.customWeightMg)
-    : grams(detail.weightMg)
-
-  const [weightInput, setWeightInput] = useState<string>(effectiveGrams)
-
-  // Sync weight input when detail product or custom weight changes
-  useEffect(() => {
-    setWeightInput(effectiveGrams)
-  }, [effectiveGrams, detail.id])
 
   // Category and subcategory names
   const categoryName = categories.find(c => c.id === detail.categoryId)?.name || 'Jewelry'
@@ -260,17 +248,6 @@ export function FullscreenViewer({
     mouseStartRef.current = null
   }
 
-  // Weight edit handler
-  const handleWeightChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value
-    setWeightInput(val)
-    const num = parseFloat(val)
-    if (!isNaN(num) && num > 0) {
-      const mg = Math.round(num * 1000)
-      onUpdateSelected(detail.id, { customWeightMg: mg })
-    }
-  }
-
   // Quantity edit handler
   const handleQtyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value
@@ -423,7 +400,10 @@ export function FullscreenViewer({
       <aside className="fullscreen-quick-card">
         <div className="quick-card-header">
           <div>
-            <strong className="quick-card-code">{detail.designCode}</strong>
+            <div className="quick-card-title-row">
+              <strong className="quick-card-code">{detail.designCode}</strong>
+              <span className="quick-card-fixed-weight" title="Fixed jewelry weight">{grams(detail.weightMg)} g</span>
+            </div>
             <span className="quick-card-sub">{categoryName}{subcategoryName ? ` / ${subcategoryName}` : ''}</span>
           </div>
 
@@ -438,24 +418,6 @@ export function FullscreenViewer({
         </div>
 
         <div className="quick-card-controls">
-          {/* Weight Input Box */}
-          <div className="quick-control-group weight-group">
-            <label htmlFor="quick-weight-input">Weight (g)</label>
-            <div className="quick-input-suffix-box">
-              <input
-                id="quick-weight-input"
-                type="number"
-                step="0.001"
-                min="0.001"
-                placeholder="0.000"
-                value={weightInput}
-                onChange={handleWeightChange}
-                aria-label={`Weight for ${detail.designCode} in grams`}
-              />
-              <span className="suffix">g</span>
-            </div>
-          </div>
-
           {/* Quantity Box */}
           <div className="quick-control-group qty-group">
             <label htmlFor="quick-qty-input">Qty</label>
@@ -470,40 +432,41 @@ export function FullscreenViewer({
               aria-label={`Quantity for ${detail.designCode}`}
             />
           </div>
-        </div>
 
-        {/* Optional Remark Section */}
-        <div className="quick-remark-section">
-          {!showRemarkInput && !selectedItem?.remark ? (
-            <button
-              type="button"
-              className="quick-remark-toggle-btn"
-              onClick={() => setShowRemarkInput(true)}
-            >
-              💬 + Add optional remark
-            </button>
-          ) : (
-            <div className="quick-remark-input-box">
-              <input
-                type="text"
-                placeholder="Optional remark (e.g. 18K yellow gold, size 14, urgent)..."
-                value={selectedItem?.remark || ''}
-                onChange={handleRemarkChange}
-                aria-label={`Remark for ${detail.designCode}`}
-                autoFocus
-              />
-              {showRemarkInput && !selectedItem?.remark && (
-                <button
-                  type="button"
-                  className="quick-remark-close-btn"
-                  onClick={() => setShowRemarkInput(false)}
-                  title="Close remark"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
-          )}
+          {/* Optional Remark Section */}
+          <div className="quick-control-group remark-group">
+            <label>Remark</label>
+            {!showRemarkInput && !selectedItem?.remark ? (
+              <button
+                type="button"
+                className="quick-remark-toggle-btn"
+                onClick={() => setShowRemarkInput(true)}
+              >
+                💬 + Add optional remark
+              </button>
+            ) : (
+              <div className="quick-remark-input-box">
+                <input
+                  type="text"
+                  placeholder="Optional remark (e.g. 18K yellow gold, size 14)..."
+                  value={selectedItem?.remark || ''}
+                  onChange={handleRemarkChange}
+                  aria-label={`Remark for ${detail.designCode}`}
+                  autoFocus
+                />
+                {showRemarkInput && !selectedItem?.remark && (
+                  <button
+                    type="button"
+                    className="quick-remark-close-btn"
+                    onClick={() => setShowRemarkInput(false)}
+                    title="Close remark"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="quick-card-footer">

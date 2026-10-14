@@ -336,22 +336,16 @@ describe('business invariant helpers',()=>{
     expect(activeUsers).toEqual(['Alice', 'Charlie'])
    })
 
-   it('correctly honors custom weight override when item has customWeightMg in cart', ()=>{
+   it('calculates order cart weight accurately using fixed jewelry weight', ()=>{
     const p1 = { id: 'p1', designCode: 'SJ-101', weightMg: 5200 }
     const p2 = { id: 'p2', designCode: 'SJ-102', weightMg: 14000 }
-    const selected: Record<string, { quantity: number | ''; remark: string; customWeightMg?: number }> = {
-      p1: { quantity: 2, remark: 'Size 14', customWeightMg: 5800 },
-      p2: { quantity: 1, remark: '' }
+    const selected: Record<string, { quantity: number | ''; remark: string }> = {
+      p1: { quantity: 2, remark: 'Size 14' },
+      p2: { quantity: 1, remark: 'Yellow Gold' }
     }
 
-    const getEffectiveWeightMg = (p: { id: string; weightMg: number }) =>
-      selected[p.id]?.customWeightMg !== undefined ? selected[p.id].customWeightMg! : p.weightMg
-
-    expect(getEffectiveWeightMg(p1)).toBe(5800)
-    expect(getEffectiveWeightMg(p2)).toBe(14000)
-
-    const totalWeight = [p1, p2].reduce((sum, p) => sum + getEffectiveWeightMg(p) * (Number(selected[p.id].quantity) || 1), 0)
-    expect(totalWeight).toBe(5800 * 2 + 14000 * 1) // 25600 mg = 25.600 g
+    const totalWeight = [p1, p2].reduce((sum, p) => sum + p.weightMg * (Number(selected[p.id].quantity) || 1), 0)
+    expect(totalWeight).toBe(5200 * 2 + 14000 * 1) // 24400 mg = 24.400 g
    })
 })
 

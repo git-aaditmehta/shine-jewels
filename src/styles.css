@@ -499,12 +499,29 @@
   gap: 12px;
 }
 
+.quick-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .quick-card-code {
   display: block;
   font-family: var(--font-display);
   font-size: 20px;
   color: var(--gold-soft);
   letter-spacing: -0.02em;
+}
+
+.quick-card-fixed-weight {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--gold-soft);
+  background: rgba(169, 119, 43, 0.18);
+  border: 1px solid rgba(169, 119, 43, 0.35);
+  padding: 2px 8px;
+  border-radius: 6px;
+  letter-spacing: 0.02em;
 }
 
 .quick-card-sub {
@@ -540,8 +557,9 @@
 
 .quick-card-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  grid-template-columns: 78px 1fr;
   gap: 10px;
+  align-items: flex-end;
 }
 
 .quick-control-group {
