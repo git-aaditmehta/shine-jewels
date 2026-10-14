@@ -34,6 +34,7 @@ import type { Category, DeviceSession, Order, Product, Session, StaffUser, Subca
 import { BatchEntry, ProductEntry, Taxonomy } from './Management'
 import { EditProductModal, ArchiveConfirmModal } from './ProductModals'
 import { EditVendorModal, ArchiveVendorModal } from './VendorModals'
+import { FullscreenViewer } from './FullscreenViewer'
 
 const grams=(mg:number)=>(mg/1000).toFixed(3)
 const uid=()=>crypto.randomUUID()
@@ -124,7 +125,7 @@ function Login({onSession}:{onSession:(session:Session)=>void}){
 export function App(){
  const [session,setSession]=useState<Session|null>(()=>getStoredSession())
  const [products,setProducts]=useState<Product[]>([]),[categories,setCategories]=useState<Category[]>([]),[subcategories,setSubcategories]=useState<Subcategory[]>([]),[vendors,setVendors]=useState<Vendor[]>([]),[orders,setOrders]=useState<Order[]>([])
- const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number|'';remark:string}>>({}),[vendorId,setVendorId]=useState(''),[vendorRepresentatives,setVendorRepresentatives]=useState<VendorRepresentative[]>([{name:'',phone:''}]),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[pdfPreview,setPdfPreview]=useState<GeneratedPdfResult|null>(null),[generatingPdf,setGeneratingPdf]=useState(false),[bytes,setBytes]=useState(0),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<DeviceSession[]>([])
+ const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number|'';remark:string;customWeightMg?:number}>>({}),[vendorId,setVendorId]=useState(''),[vendorRepresentatives,setVendorRepresentatives]=useState<VendorRepresentative[]>([{name:'',phone:''}]),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[pdfPreview,setPdfPreview]=useState<GeneratedPdfResult|null>(null),[generatingPdf,setGeneratingPdf]=useState(false),[bytes,setBytes]=useState(0),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<DeviceSession[]>([])
  const [editingProduct,setEditingProduct]=useState<Product|null>(null),[archivingProduct,setArchivingProduct]=useState<Product|null>(null),[archivedProductsList,setArchivedProductsList]=useState<Product[]>([]),[adminProductTab,setAdminProductTab]=useState<'active'|'add'|'archived'>('active'),[adminSearch,setAdminSearch]=useState('')
  const [archivedVendorsList,setArchivedVendorsList]=useState<Vendor[]>([]),[archivedCategoriesList,setArchivedCategoriesList]=useState<Category[]>([]),[archivedSubcategoriesList,setArchivedSubcategoriesList]=useState<Subcategory[]>([])
  const [editingVendor,setEditingVendor]=useState<Vendor|null>(null),[archivingVendor,setArchivingVendor]=useState<Vendor|null>(null),[adminVendorTab,setAdminVendorTab]=useState<'active'|'add'|'archived'>('active'),[vendorSearch,setVendorSearch]=useState(''),[adminDeviceTab,setAdminDeviceTab]=useState<'active'|'staff'|'add_staff'|'all'>('active')
@@ -210,25 +211,8 @@ export function App(){
  const hasPrev = activeIndex > 0
  const hasNext = activeIndex >= 0 && activeIndex < activeList.length - 1
  const goPrev = () => { if (hasPrev) setDetail(activeList[activeIndex - 1]) }
- const goNext = () => { if (hasNext) setDetail(activeList[activeIndex + 1]) }
- const touchStartX = useRef<number | null>(null)
- const touchStartY = useRef<number | null>(null)
- const handleTouchStart = (e: React.TouchEvent) => {
-  touchStartX.current = e.touches[0].clientX
-  touchStartY.current = e.touches[0].clientY
- }
- const handleTouchEnd = (e: React.TouchEvent) => {
-  if (touchStartX.current === null || touchStartY.current === null) return
-  const deltaX = e.changedTouches[0].clientX - touchStartX.current
-  const deltaY = e.changedTouches[0].clientY - touchStartY.current
-  touchStartX.current = null
-  touchStartY.current = null
-  if (Math.abs(deltaX) > 40 && Math.abs(deltaX) > Math.abs(deltaY)) {
-   if (deltaX < 0) goNext()
-   else goPrev()
-  }
- }
- useEffect(() => {
+  const goNext = () => { if (hasNext) setDetail(activeList[activeIndex + 1]) }
+  useEffect(() => {
   if (!detail) return
   const handleKeyDown = (e: KeyboardEvent) => {
    if (e.key === 'ArrowRight') {
@@ -317,8 +301,9 @@ export function App(){
   useEffect(()=>{if(view==='history'&&online){void triggerSync()}},[view,online])
   useEffect(()=>{if(view==='devices'&&session?.role==='ADMIN'){void loadDevices();void loadStaff()}},[view,session?.role])
  const toggle=(id:string)=>setSelected(x=>x[id]?Object.fromEntries(Object.entries(x).filter(([k])=>k!==id)):{...x,[id]:{quantity:'',remark:''}})
- const change=(id:string,key:'quantity'|'remark',value:string)=>setSelected(s=>({...s,[id]:{...s[id], [key]:key==='quantity'?(value===''? '':Math.max(1,parseInt(value,10)||1)):value}}))
- const makeOrder=async()=>{const vendor=vendors.find(v=>v.id===vendorId);const picks=products.filter(p=>selected[p.id]);if(!vendor){setNotice('Select a vendor before reviewing the order.');return}if(!picks.length){setNotice('Select at least one design.');return};const max=Math.max(0,...orders.map(o=>o.orderNumber||0));const cleanedReps=vendorRepresentatives.map(r=>({name:r.name.trim(),phone:r.phone.trim()})).filter(r=>r.name||r.phone);const order:Order={id:uid(),orderNumber:max+1,vendor,representatives:cleanedReps.length?cleanedReps:undefined,salesperson:session?.displayName||'Salesperson',status:'FINALIZED',createdAt:new Date().toISOString(),generatedAt:new Date().toISOString(),items:picks.map((p,index)=>({productId:p.id,serialNumber:index+1,designCode:p.designCode,category:categories.find(c=>c.id===p.categoryId)?.name||'',subcategory:subcategories.find(s=>s.id===p.subcategoryId)?.name||'',weightMg:p.weightMg,quantity:Number(selected[p.id].quantity)||1,remark:selected[p.id].remark,image:p.gridImage}))};await storage.saveOrder(order);setOrders(o=>[order,...o]);setSelected({});setVendorRepresentatives([{name:'',phone:''}]);await load();setNotice(`Order #${order.orderNumber} finalized. Generating PDF preview…`);setGeneratingPdf(true);try{const res=await createOrderPdfBlob(order);setPdfPreview(res);setNotice(`Order #${order.orderNumber} PDF preview is ready.`)}catch(err){setNotice(err instanceof Error?`PDF generation failed: ${err.message}`:'PDF generation failed.')}finally{setGeneratingPdf(false)}}
+ const change=(id:string,key:'quantity'|'remark',value:string)=>setSelected(s=>({...s,[id]:{...(s[id]||{quantity:1,remark:''}),[key]:key==='quantity'?(value===''? '':Math.max(1,parseInt(value,10)||1)):value}}))
+ const updateSelectedItem=(id:string,updates:Partial<{quantity:number|'';remark:string;customWeightMg?:number}>)=>setSelected(s=>({...s,[id]:{...(s[id]||{quantity:1,remark:''}),...updates}}))
+ const makeOrder=async()=>{const vendor=vendors.find(v=>v.id===vendorId);const picks=products.filter(p=>selected[p.id]);if(!vendor){setNotice('Select a vendor before reviewing the order.');return}if(!picks.length){setNotice('Select at least one design.');return};const max=Math.max(0,...orders.map(o=>o.orderNumber||0));const cleanedReps=vendorRepresentatives.map(r=>({name:r.name.trim(),phone:r.phone.trim()})).filter(r=>r.name||r.phone);const order:Order={id:uid(),orderNumber:max+1,vendor,representatives:cleanedReps.length?cleanedReps:undefined,salesperson:session?.displayName||'Salesperson',status:'FINALIZED',createdAt:new Date().toISOString(),generatedAt:new Date().toISOString(),items:picks.map((p,index)=>({productId:p.id,serialNumber:index+1,designCode:p.designCode,category:categories.find(c=>c.id===p.categoryId)?.name||'',subcategory:subcategories.find(s=>s.id===p.subcategoryId)?.name||'',weightMg:selected[p.id]?.customWeightMg!==undefined?selected[p.id].customWeightMg!:p.weightMg,quantity:Number(selected[p.id].quantity)||1,remark:selected[p.id].remark,image:p.gridImage}))};await storage.saveOrder(order);setOrders(o=>[order,...o]);setSelected({});setVendorRepresentatives([{name:'',phone:''}]);await load();setNotice(`Order #${order.orderNumber} finalized. Generating PDF preview…`);setGeneratingPdf(true);try{const res=await createOrderPdfBlob(order);setPdfPreview(res);setNotice(`Order #${order.orderNumber} PDF preview is ready.`)}catch(err){setNotice(err instanceof Error?`PDF generation failed: ${err.message}`:'PDF generation failed.')}finally{setGeneratingPdf(false)}}
   const openOrderPdfPreview=async(order:Order)=>{setGeneratingPdf(true);setNotice(`Generating PDF for Order #${order.orderNumber}…`);try{const res=await createOrderPdfBlob(order);setPdfPreview(res);setNotice(`Order #${order.orderNumber} PDF preview is ready.`)}catch(err){setNotice(err instanceof Error?`PDF generation failed: ${err.message}`:'PDF generation failed.')}finally{setGeneratingPdf(false)}}
  const addVendor=async(e:React.FormEvent<HTMLFormElement>)=>{
   e.preventDefault();
@@ -594,7 +579,8 @@ export function App(){
 
  const addCategory=async(c:Category)=>{await storage.saveCategory(c);await load();triggerBackgroundUpload()}
  const addSubcategory=async(s:Subcategory)=>{await storage.saveSubcategory(s);await load();triggerBackgroundUpload()}
- const cart=products.filter(p=>selected[p.id]); const total=cart.reduce((n,p)=>n+p.weightMg*(Number(selected[p.id].quantity)||1),0)
+ const getEffectiveWeightMg = (p: Product) => (selected[p.id]?.customWeightMg !== undefined ? selected[p.id].customWeightMg! : p.weightMg)
+ const cart=products.filter(p=>selected[p.id]); const total=cart.reduce((n,p)=>n+getEffectiveWeightMg(p)*(Number(selected[p.id].quantity)||1),0)
  if(!session)return <Login onSession={setSession}/>
  const commonViews:View[]=['catalogue','history','vendors','products','batch','taxonomy','storage']
  const views=(session.role==='ADMIN'?[...commonViews,'devices']:commonViews) as View[]
@@ -643,7 +629,7 @@ export function App(){
   </div>
  ))}
 </div>
-)}<div className="line"/>{cart.length===0?<p className="muted">Select designs from the catalogue. Your work stays on this device when offline.</p>:<div className="cart">{cart.map(p=><div className="cart-item" key={p.id}><img src={p.gridImage} alt="" /><div><strong>{p.designCode}</strong><span>{grams(p.weightMg)} g</span><label>Qty<input aria-label={`Quantity for ${p.designCode}`} type="number" min="1" step="1" placeholder="1" value={selected[p.id].quantity} onChange={e=>change(p.id,'quantity',e.target.value)} /></label><input aria-label={`Remark for ${p.designCode}`} value={selected[p.id].remark} onChange={e=>change(p.id,'remark',e.target.value)} placeholder="Optional remark" /></div></div>)}</div>}<div className="total"><span>Total weight</span><strong>{grams(total)} g</strong></div><button className="primary" disabled={generatingPdf} onClick={()=>void makeOrder()}>{generatingPdf?'Generating PDF preview…':'Finalize & generate PDF'}</button><small>PDF is generated locally. Cloud sync follows when connected.</small></aside></main>
+)}<div className="line"/>{cart.length===0?<p className="muted">Select designs from the catalogue. Your work stays on this device when offline.</p>:<div className="cart">{cart.map(p=><div className="cart-item" key={p.id}><img src={p.gridImage} alt="" /><div><strong>{p.designCode}</strong><span>{grams(getEffectiveWeightMg(p))} g{selected[p.id]?.customWeightMg !== undefined && selected[p.id]?.customWeightMg !== p.weightMg ? ' (custom)' : ''}</span><label>Qty<input aria-label={`Quantity for ${p.designCode}`} type="number" min="1" step="1" placeholder="1" value={selected[p.id].quantity} onChange={e=>change(p.id,'quantity',e.target.value)} /></label><input aria-label={`Remark for ${p.designCode}`} value={selected[p.id].remark} onChange={e=>change(p.id,'remark',e.target.value)} placeholder="Optional remark" /></div></div>)}</div>}<div className="total"><span>Total weight</span><strong>{grams(total)} g</strong></div><button className="primary" disabled={generatingPdf} onClick={()=>void makeOrder()}>{generatingPdf?'Generating PDF preview…':'Finalize & generate PDF'}</button><small>PDF is generated locally. Cloud sync follows when connected.</small></aside></main>
   {view==='vendors'&&(
    <main className="single-view">
     <div className="section-title">
@@ -1472,74 +1458,24 @@ export function App(){
    )}
   </main>
  )}
-
   {detail && (
-   <div
-    className="modal"
-    role="dialog"
-    aria-modal="true"
-    aria-label={`${detail.designCode} details`}
-    onTouchStart={handleTouchStart}
-    onTouchEnd={handleTouchEnd}
-   >
-    <button className="close" onClick={() => setDetail(null)} aria-label="Close detail">×</button>
-    <div className="modal-stage">
-     <button
-      type="button"
-      className="modal-nav prev"
-      onClick={goPrev}
-      disabled={!hasPrev}
-      aria-label="Previous design"
-      title="Previous design (← arrow key)"
-     >
-      &lsaquo;
-     </button>
-     <img
-      key={detail.id}
-      src={resolvedDetailUrl || detail.gridImage}
-      alt={`${detail.designCode} detailed jewelry view`}
-      loading="eager"
-      onError={() => {
-        if (resolvedDetailUrl !== detail.gridImage && detail.gridImage) {
-          setResolvedDetailUrl(detail.gridImage)
-        }
-      }}
-     />
-     <button
-      type="button"
-      className="modal-nav next"
-      onClick={goNext}
-      disabled={!hasNext}
-      aria-label="Next design"
-      title="Next design (→ arrow key)"
-     >
-      &rsaquo;
-     </button>
-    </div>
-    <div className="modal-info">
-     <div className="modal-header-meta">
-      <span className="modal-index-badge">
-       {activeIndex !== -1 ? `Item ${activeIndex + 1} of ${activeList.length}` : 'Design Preview'}
-      </span>
-     </div>
-     <div>
-      <p className="eyebrow">high-resolution detail view</p>
-      <h2>{detail.designCode}</h2>
-     </div>
-     <p style={{ margin: 0, fontSize: '15px', color: 'var(--paper)' }}>
-      <strong>{grams(detail.weightMg)} g</strong> &middot; {categories.find(c => c.id === detail.categoryId)?.name || 'Jewelry'}
-      {subcategories.find(s => s.id === detail.subcategoryId)?.name ? ` / ${subcategories.find(s => s.id === detail.subcategoryId)?.name}` : ''}
-     </p>
-     <button
-      type="button"
-      className="primary"
-      style={{ marginTop: 'var(--space-2)' }}
-      onClick={() => toggle(detail.id)}
-     >
-      {selected[detail.id] ? '✓ Selected in Order (Click to Remove)' : '+ Select Design for Order'}
-     </button>
-    </div>
-   </div>
+    <FullscreenViewer
+      detail={detail}
+      activeList={activeList}
+      activeIndex={activeIndex}
+      hasPrev={hasPrev}
+      hasNext={hasNext}
+      goPrev={goPrev}
+      goNext={goNext}
+      onClose={() => setDetail(null)}
+      resolvedDetailUrl={resolvedDetailUrl}
+      selected={selected}
+      onToggle={toggle}
+      onUpdateSelected={updateSelectedItem}
+      categories={categories}
+      subcategories={subcategories}
+      grams={grams}
+    />
   )}
    {pdfPreview && (
     <div className="pdf-preview-backdrop" role="dialog" aria-modal="true" aria-label="Order PDF Preview">
