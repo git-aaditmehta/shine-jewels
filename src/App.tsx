@@ -28,7 +28,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { hasError
 }
 import { login, workerApi } from './api'
 import { cloudImageStorageBytes, initialDownload, push, recoverMissingImages, synchronize, uploadPendingProductImages } from './sync'
-import { createOrderPdfBlob, downloadPdfBlob, sharePdfFile, type GeneratedPdfResult } from './pdf'
+import { createBothOrderPdfs, createSalesDemoPdfBlob, downloadPdfBlob, sharePdfFile, type GeneratedPdfResult } from './pdf'
 import { storage } from './storage'
 import type { Category, DeviceSession, Order, Product, Session, StaffUser, Subcategory, Vendor, VendorRepresentative } from './types'
 import { BatchEntry, ProductEntry, Taxonomy } from './Management'
@@ -100,8 +100,49 @@ function getDeviceName(): string {
   return `${os} (${browser})`
 }
 
+function LogoLightboxModal({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      className="logo-lightbox-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Shine Jewels Emblem Zoom"
+      onClick={onClose}
+    >
+      <div className="logo-lightbox-card" onClick={e => e.stopPropagation()}>
+        <button
+          type="button"
+          className="logo-lightbox-close"
+          onClick={onClose}
+          aria-label="Close emblem zoom"
+        >
+          &times;
+        </button>
+        <div className="logo-lightbox-image-wrap">
+          <img
+            src="/logo.png"
+            className="logo-lightbox-image"
+            alt="Shine Jewels Emblem"
+          />
+        </div>
+        <h2 className="logo-lightbox-title">SHINE JEWELS</h2>
+        <p className="logo-lightbox-tagline">WE BRING THE SPARKLE YOU MAKE IT SHINE</p>
+      </div>
+    </div>
+  )
+}
+
 function Login({onSession}:{onSession:(session:Session)=>void}){
- const [organizationId,setOrganizationId]=useState('shine-jewels-demo'),[username,setUsername]=useState(''),[password,setPassword]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[progressMsg,setProgressMsg]=useState('')
+ const [organizationId,setOrganizationId]=useState(''),[username,setUsername]=useState(''),[password,setPassword]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[progressMsg,setProgressMsg]=useState('')
+ const [logoModalOpen,setLogoModalOpen]=useState(false)
  const submit=async(event:React.FormEvent<HTMLFormElement>)=>{
   event.preventDefault();setError('');setBusy(true);setProgressMsg('Signing in…')
   try{
@@ -119,13 +160,61 @@ function Login({onSession}:{onSession:(session:Session)=>void}){
   }catch(reason){setError(reason instanceof Error?reason.message:'Unable to sign in. Try again.')}
   finally{setBusy(false);setProgressMsg('')}
  }
- return <main className="login-shell"><section className="login-card" aria-labelledby="login-title"><div className="brand"><span className="mark">S</span><div><strong>shine jewels</strong><small>sales catalogue</small></div></div><p className="eyebrow">secure access</p><h1 id="login-title">Sign in to your catalogue.</h1><p>Use your organization account to continue.</p><form onSubmit={submit}><label>Organization ID<input value={organizationId} onChange={e=>setOrganizationId(e.target.value)} autoComplete="organization" required /></label><label>Username<input value={username} onChange={e=>setUsername(e.target.value)} autoComplete="username" required autoFocus /></label><label>Password<input value={password} onChange={e=>setPassword(e.target.value)} type="password" autoComplete="current-password" required /></label>{error&&<p className="field-error" role="alert">{error}</p>}<button className="primary" disabled={busy}>{busy?(progressMsg||'Signing in…'):'Sign in'}</button></form></section></main>
+ return <>
+  <div className="brand-watermark-overlay" aria-hidden="true" />
+  {logoModalOpen && <LogoLightboxModal onClose={() => setLogoModalOpen(false)} />}
+  <main className="login-shell">
+    <section className="login-card" aria-labelledby="login-title">
+      <div className="brand login-brand-header">
+        <div className="brand-logo-col">
+          <div
+            className="brand-logo-frame login-logo-frame-large"
+            role="button"
+            tabIndex={0}
+            aria-label="Zoom Shine Jewels emblem"
+            title="Click to zoom Shine Jewels emblem"
+            onClick={() => setLogoModalOpen(true)}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setLogoModalOpen(true) } }}
+          >
+            <img src="/logo.png" className="brand-logo-mark login-logo-large" alt="Shine Jewels Logo" aria-hidden="true" />
+          </div>
+        </div>
+        <div className="brand-info">
+          <strong className="brand-wordmark">SHINE JEWELS</strong>
+          <small className="brand-tagline">WE BRING THE SPARKLE YOU MAKE IT SHINE</small>
+        </div>
+      </div>
+      <p className="eyebrow">secure access</p>
+      <h1 id="login-title">Sign in to your catalogue.</h1>
+      <p>Use your organization account to continue.</p>
+      <form onSubmit={submit}>
+        <label>Organization ID<input value={organizationId} onChange={e=>setOrganizationId(e.target.value)} autoComplete="organization" required /></label>
+        <label>Username<input value={username} onChange={e=>setUsername(e.target.value)} autoComplete="username" required autoFocus /></label>
+        <label>Password<input value={password} onChange={e=>setPassword(e.target.value)} type="password" autoComplete="current-password" required /></label>
+        {error&&<p className="field-error" role="alert">{error}</p>}
+        <button className="primary" disabled={busy}>{busy?(progressMsg||'Signing in…'):'Sign in'}</button>
+      </form>
+    </section>
+  </main>
+</>
 }
 
 export function App(){
  const [session,setSession]=useState<Session|null>(()=>getStoredSession())
  const [products,setProducts]=useState<Product[]>([]),[categories,setCategories]=useState<Category[]>([]),[subcategories,setSubcategories]=useState<Subcategory[]>([]),[vendors,setVendors]=useState<Vendor[]>([]),[orders,setOrders]=useState<Order[]>([])
- const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number|'';remark:string}>>({}),[vendorId,setVendorId]=useState(''),[vendorRepresentatives,setVendorRepresentatives]=useState<VendorRepresentative[]>([{name:'',phone:''}]),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[pdfPreview,setPdfPreview]=useState<GeneratedPdfResult|null>(null),[generatingPdf,setGeneratingPdf]=useState(false),[bytes,setBytes]=useState(0),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<DeviceSession[]>([])
+ const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number|'';remark:string}>>({}),[vendorId,setVendorId]=useState(''),[vendorRepresentatives,setVendorRepresentatives]=useState<VendorRepresentative[]>([{name:'',phone:''}]),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[generatingPdf,setGeneratingPdf]=useState(false),[bytes,setBytes]=useState(0),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<DeviceSession[]>([])
+ const [logoModalOpen,setLogoModalOpen]=useState(false)
+ const [demoMode,setDemoMode]=useState(false)
+ const [demoSelected,setDemoSelected]=useState<Record<string,boolean>>({})
+ const [pdfModal,setPdfModal]=useState<{
+   type: 'order' | 'demo'
+   orderData?: {
+     client: GeneratedPdfResult
+     manufacturer: GeneratedPdfResult
+     activeCopy: 'client' | 'manufacturer'
+   }
+   demoPdf?: GeneratedPdfResult
+ } | null>(null)
  const [editingProduct,setEditingProduct]=useState<Product|null>(null),[archivingProduct,setArchivingProduct]=useState<Product|null>(null),[archivedProductsList,setArchivedProductsList]=useState<Product[]>([]),[adminProductTab,setAdminProductTab]=useState<'active'|'add'|'archived'>('active'),[adminSearch,setAdminSearch]=useState('')
  const [archivedVendorsList,setArchivedVendorsList]=useState<Vendor[]>([]),[archivedCategoriesList,setArchivedCategoriesList]=useState<Category[]>([]),[archivedSubcategoriesList,setArchivedSubcategoriesList]=useState<Subcategory[]>([])
  const [editingVendor,setEditingVendor]=useState<Vendor|null>(null),[archivingVendor,setArchivingVendor]=useState<Vendor|null>(null),[adminVendorTab,setAdminVendorTab]=useState<'active'|'add'|'archived'>('active'),[vendorSearch,setVendorSearch]=useState(''),[adminDeviceTab,setAdminDeviceTab]=useState<'active'|'staff'|'add_staff'|'all'>('active')
@@ -304,8 +393,106 @@ export function App(){
  const removeFromOrder=(id:string)=>setSelected(x=>{if(!x[id])return x;const next={...x};delete next[id];return next})
  const change=(id:string,key:'quantity'|'remark',value:string)=>setSelected(s=>({...s,[id]:{...(s[id]||{quantity:1,remark:''}),[key]:key==='quantity'?(value===''? '':Math.max(1,parseInt(value,10)||1)):value}}))
  const updateSelectedItem=(id:string,updates:Partial<{quantity:number|'';remark:string}>)=>setSelected(s=>({...s,[id]:{...(s[id]||{quantity:1,remark:''}),...updates}}))
- const makeOrder=async()=>{const vendor=vendors.find(v=>v.id===vendorId);const picks=products.filter(p=>selected[p.id]);if(!vendor){setNotice('Select a vendor before reviewing the order.');return}if(!picks.length){setNotice('Select at least one design.');return};const max=Math.max(0,...orders.map(o=>o.orderNumber||0));const cleanedReps=vendorRepresentatives.map(r=>({name:r.name.trim(),phone:r.phone.trim()})).filter(r=>r.name||r.phone);const order:Order={id:uid(),orderNumber:max+1,vendor,representatives:cleanedReps.length?cleanedReps:undefined,salesperson:session?.displayName||'Salesperson',status:'FINALIZED',createdAt:new Date().toISOString(),generatedAt:new Date().toISOString(),items:picks.map((p,index)=>({productId:p.id,serialNumber:index+1,designCode:p.designCode,category:categories.find(c=>c.id===p.categoryId)?.name||'',subcategory:subcategories.find(s=>s.id===p.subcategoryId)?.name||'',weightMg:p.weightMg,quantity:Number(selected[p.id].quantity)||1,remark:selected[p.id].remark,image:p.gridImage}))};await storage.saveOrder(order);setOrders(o=>[order,...o]);setSelected({});setVendorRepresentatives([{name:'',phone:''}]);await load();setNotice(`Order #${order.orderNumber} finalized. Generating PDF preview…`);setGeneratingPdf(true);try{const res=await createOrderPdfBlob(order);setPdfPreview(res);setNotice(`Order #${order.orderNumber} PDF preview is ready.`)}catch(err){setNotice(err instanceof Error?`PDF generation failed: ${err.message}`:'PDF generation failed.')}finally{setGeneratingPdf(false)}}
-  const openOrderPdfPreview=async(order:Order)=>{setGeneratingPdf(true);setNotice(`Generating PDF for Order #${order.orderNumber}…`);try{const res=await createOrderPdfBlob(order);setPdfPreview(res);setNotice(`Order #${order.orderNumber} PDF preview is ready.`)}catch(err){setNotice(err instanceof Error?`PDF generation failed: ${err.message}`:'PDF generation failed.')}finally{setGeneratingPdf(false)}}
+ const toggleDemoItem=(id:string)=>{
+  setDemoSelected(prev=>{
+   const next={...prev}
+   if(next[id]) delete next[id]
+   else next[id]=true
+   return next
+  })
+ }
+ const selectAllFilteredForDemo=()=>{
+  const allSelected=filtered.length>0&&filtered.every(p=>demoSelected[p.id])
+  if(allSelected){
+   setDemoSelected(prev=>{
+    const next={...prev}
+    filtered.forEach(p=>{ delete next[p.id] })
+    return next
+   })
+   setNotice(`Deselected ${filtered.length} designs.`)
+  } else {
+   setDemoSelected(prev=>{
+    const next={...prev}
+    filtered.forEach(p=>{ next[p.id]=true })
+    return next
+   })
+   setNotice(`Selected all ${filtered.length} filtered designs for Sales Demo.`)
+  }
+ }
+ const clearDemoSelection=()=>{
+  setDemoSelected({})
+  setNotice('Cleared Sales Demo selection.')
+ }
+ const generateSalesDemoPdf=async()=>{
+  const demoProducts=products.filter(p=>!p.deleted&&demoSelected[p.id])
+  if(!demoProducts.length){
+   setNotice('Please select at least one design to generate a Sales Demo PDF.')
+   return
+  }
+  setGeneratingPdf(true)
+  setNotice(`Rendering High-Resolution Sales Demo PDF (${demoProducts.length} designs)…`)
+  try{
+   const demoPdf=await createSalesDemoPdfBlob(
+    demoProducts,
+    categories,
+    subcategories,
+    (curr,total)=>setNotice(`Rendering design ${curr} of ${total} in high resolution…`)
+   )
+   setPdfModal({
+    type:'demo',
+    demoPdf
+   })
+   setNotice(`Sales Demo PDF ready: ${demoProducts.length} high-resolution showcase pages.`)
+  }catch(err){
+   setNotice(err instanceof Error?`Sales Demo PDF failed: ${err.message}`:'Sales Demo PDF generation failed.')
+  }finally{
+   setGeneratingPdf(false)
+  }
+ }
+ const makeOrder=async()=>{
+  const vendor=vendors.find(v=>v.id===vendorId);
+  const picks=products.filter(p=>selected[p.id]);
+  if(!vendor){setNotice('Select a vendor before reviewing the order.');return}
+  if(!picks.length){setNotice('Select at least one design.');return};
+  const max=Math.max(0,...orders.map(o=>o.orderNumber||0));
+  const cleanedReps=vendorRepresentatives.map(r=>({name:r.name.trim(),phone:r.phone.trim()})).filter(r=>r.name||r.phone);
+  const order:Order={id:uid(),orderNumber:max+1,vendor,representatives:cleanedReps.length?cleanedReps:undefined,salesperson:session?.displayName||'Salesperson',status:'FINALIZED',createdAt:new Date().toISOString(),generatedAt:new Date().toISOString(),items:picks.map((p,index)=>({productId:p.id,serialNumber:index+1,designCode:p.designCode,category:categories.find(c=>c.id===p.categoryId)?.name||'',subcategory:subcategories.find(s=>s.id===p.subcategoryId)?.name||'',weightMg:p.weightMg,quantity:Number(selected[p.id].quantity)||1,remark:selected[p.id].remark,image:p.gridImage}))};
+  await storage.saveOrder(order);
+  setOrders(o=>[order,...o]);
+  setSelected({});
+  setVendorRepresentatives([{name:'',phone:''}]);
+  await load();
+  setNotice(`Order #${order.orderNumber} finalized. Generating Client & Manufacturer PDFs…`);
+  setGeneratingPdf(true);
+  try{
+   const { client, manufacturer } = await createBothOrderPdfs(order);
+   setPdfModal({
+    type: 'order',
+    orderData: { client, manufacturer, activeCopy: 'client' }
+   });
+   setNotice(`Order #${order.orderNumber} ready: Client Copy & Manufacturer Copy generated.`);
+  }catch(err){
+   setNotice(err instanceof Error?`PDF generation failed: ${err.message}`:'PDF generation failed.')
+  }finally{
+   setGeneratingPdf(false)
+  }
+ }
+ const openOrderPdfPreview=async(order:Order)=>{
+  setGeneratingPdf(true);
+  setNotice(`Generating Client & Manufacturer PDFs for Order #${order.orderNumber}…`);
+  try{
+   const { client, manufacturer } = await createBothOrderPdfs(order);
+   setPdfModal({
+    type: 'order',
+    orderData: { client, manufacturer, activeCopy: 'client' }
+   });
+   setNotice(`Order #${order.orderNumber} PDFs ready: Client Copy & Manufacturer Copy.`);
+  }catch(err){
+   setNotice(err instanceof Error?`PDF generation failed: ${err.message}`:'PDF generation failed.')
+  }finally{
+   setGeneratingPdf(false)
+  }
+ }
  const addVendor=async(e:React.FormEvent<HTMLFormElement>)=>{
   e.preventDefault();
   const form=e.currentTarget;
@@ -614,16 +801,84 @@ export function App(){
  const addCategory=async(c:Category)=>{await storage.saveCategory(c);await load();triggerBackgroundUpload()}
  const addSubcategory=async(s:Subcategory)=>{await storage.saveSubcategory(s);await load();triggerBackgroundUpload()}
  const cart=products.filter(p=>selected[p.id]); const total=cart.reduce((n,p)=>n+p.weightMg*(Number(selected[p.id].quantity)||1),0)
- if(!session)return <Login onSession={setSession}/>
+ if(!session) return <Login onSession={setSession} />
  const commonViews:View[]=['catalogue','history','vendors','products','batch','taxonomy','storage']
  const views=(session.role==='ADMIN'?[...commonViews,'devices']:commonViews) as View[]
+  // Sync view name to body for CSS theme scoping
+  useEffect(() => {
+    document.body.dataset.view = view
+    return () => { delete document.body.dataset.view }
+  }, [view])
+
   const logout=()=>{sessionStorage.removeItem(sessionKey);localStorage.removeItem(sessionKey);void storage.clearSession();setSession(null)}
-  return <div className="app-shell"><header><div className="brand"><span className="mark">S</span><div><strong>shine jewels</strong><small>{session.role==='ADMIN'?'administrator':'sales catalogue'}</small></div></div><div className="session-actions"><div className="connection" style={{color:online?((syncing||uploading)?'var(--gold)':'var(--green)'):'var(--muted)'}}><i style={{background:online?((syncing||uploading)?'var(--gold)':'var(--green)'):'var(--muted)'}}/> {online?((syncing||uploading)?(syncing?'Syncing…':'Uploading…'):`Online · ${session.displayName}`):`Offline · ${session.displayName}`}</div><button className="quiet logout" onClick={logout}>Log out</button></div></header>
+  return <>
+  <div className="brand-watermark-overlay" aria-hidden="true" />
+  {logoModalOpen && <LogoLightboxModal onClose={() => setLogoModalOpen(false)} />}
+  <div className="app-shell">
+    <header>
+      <div className="brand">
+        <div className="brand-logo-col">
+          <div
+            className="brand-logo-frame"
+            role="button"
+            tabIndex={0}
+            aria-label="Zoom Shine Jewels emblem"
+            title="Click to zoom Shine Jewels emblem"
+            onClick={() => setLogoModalOpen(true)}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setLogoModalOpen(true) } }}
+          >
+            <img src="/logo.png" className="brand-logo-mark" alt="Shine Jewels Logo" aria-hidden="true" />
+          </div>
+          {session.role === 'ADMIN' && <span className="brand-role-bracket">(admin)</span>}
+        </div>
+        <div className="brand-info">
+          <strong className="brand-wordmark">SHINE JEWELS</strong>
+          <small className="brand-tagline">WE BRING THE SPARKLE YOU MAKE IT SHINE</small>
+        </div>
+      </div>
+      <div className="session-actions">
+        <div className="connection" style={{color:online?((syncing||uploading)?'var(--gold)':'var(--green)'):'var(--muted)'}}>
+          <i style={{background:online?((syncing||uploading)?'var(--gold)':'var(--green)'):'var(--muted)'}}/> {online?((syncing||uploading)?(syncing?'Syncing…':'Uploading…'):`Online · ${session.displayName}`):`Offline · ${session.displayName}`}
+        </div>
+        <button className="quiet logout" onClick={logout}>Log out</button>
+      </div>
+    </header>
   <nav aria-label="Primary navigation">{views.map(item=><button key={item} className={view===item?'active':''} onClick={()=>setView(item)}>{item}</button>)}</nav>
   {notice&&<div className="notice" role="status">{notice}<button onClick={()=>setNotice('')} aria-label="Dismiss message">×</button></div>}
-  <main className="catalogue-layout" style={{display:view==='catalogue'?undefined:'none'}}><section className="catalogue"><div className="section-title"><div><p className="eyebrow">design library</p><h1>Find the right piece, without waiting.</h1></div><span>{filtered.length} designs</span></div><div className="filters"><label>Search design code<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="e.g. SJ-1001" /></label><label>Category<select value={category} onChange={e=>{setCategory(e.target.value);setSubcategory('')}}><option value="">All categories</option>{categories.map(c=><option value={c.id} key={c.id}>{c.name}</option>)}</select></label><label>Subcategory<select value={subcategory} onChange={e=>setSubcategory(e.target.value)}><option value="">All subcategories</option>{subcategories.filter(s=>!category||s.categoryId===category).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label><button className="quiet" onClick={clearFilters}>Clear filters</button></div>
+  <main className="catalogue-layout" style={{display:view==='catalogue'?undefined:'none'}}><section className="catalogue"><div className="section-title"><div><p className="eyebrow">design library</p><h1>Find the right piece, without waiting.</h1></div><div style={{display:'flex',gap:'10px',alignItems:'center'}}><span>{filtered.length} designs</span><button type="button" className={`sales-demo-toggle-btn ${demoMode?'active':''}`} onClick={()=>setDemoMode(m=>!m)} title="Create high-resolution product demo PDF">✨ {demoMode?'Exit Demo Mode':'Sales Demo PDF'}</button></div></div><div className="filters"><label>Search design code<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="e.g. SJ-1001" /></label><label>Category<select value={category} onChange={e=>{setCategory(e.target.value);setSubcategory('')}}><option value="">All categories</option>{categories.map(c=><option value={c.id} key={c.id}>{c.name}</option>)}</select></label><label>Subcategory<select value={subcategory} onChange={e=>setSubcategory(e.target.value)}><option value="">All subcategories</option>{subcategories.filter(s=>!category||s.categoryId===category).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label><button className="quiet" onClick={clearFilters}>Clear filters</button></div>
   <div className="weight-filter-bar"><div className="weight-slider-group"><div className="weight-slider-header"><span>Weight Range Slider</span><span>{currentMinVal} g &mdash; {currentMaxVal} g</span></div><div className="dual-slider-track-box"><div className="dual-slider-rail" /><div className="dual-slider-fill" style={{left:`${leftPercent}%`,width:`${widthPercent}%`}} /><input aria-label="Minimum weight slider" className="dual-slider-thumb" type="range" min={0} max={maxPossibleWeight} step={1} value={currentMinVal} onPointerDown={()=>setSliderActive('min')} onChange={onSliderMinChange} style={{zIndex:sliderActive==='min'?5:(currentMinVal>maxPossibleWeight-5?5:3)}} /><input aria-label="Maximum weight slider" className="dual-slider-thumb" type="range" min={0} max={maxPossibleWeight} step={1} value={currentMaxVal} onPointerDown={()=>setSliderActive('max')} onChange={onSliderMaxChange} style={{zIndex:sliderActive==='max'?5:4}} /></div></div><div className="weight-presets" role="group" aria-label="Quick weight presets"><button type="button" className={`weight-preset-btn ${!minWeight&&!maxWeight?'active':''}`} onClick={()=>applyWeightPreset('','')}>All</button><button type="button" className={`weight-preset-btn ${minWeight===''&&maxWeight==='5'?'active':''}`} onClick={()=>applyWeightPreset('','5')}>&lt; 5g</button><button type="button" className={`weight-preset-btn ${minWeight==='5'&&maxWeight==='15'?'active':''}`} onClick={()=>applyWeightPreset('5','15')}>5&ndash;15g</button><button type="button" className={`weight-preset-btn ${minWeight==='15'&&maxWeight==='30'?'active':''}`} onClick={()=>applyWeightPreset('15','30')}>15&ndash;30g</button><button type="button" className={`weight-preset-btn ${minWeight==='30'&&maxWeight===''?'active':''}`} onClick={()=>applyWeightPreset('30','')}>30g+</button></div><div className="weight-inputs"><label>Min (g)<input type="number" step="0.001" min="0" placeholder="0.000" value={minWeight} onChange={e=>setMinWeight(e.target.value)} /></label><span>to</span><label>Max (g)<input type="number" step="0.001" min="0" placeholder="Max" value={maxWeight} onChange={e=>setMaxWeight(e.target.value)} /></label></div></div>
-  <div className="grid">{visibleProducts.map(product=><article className={'product '+(selected[product.id]?'chosen':'')} key={product.id}><button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><img src={product.gridImage} alt={`${product.designCode} jewelry design`} loading="lazy" decoding="async" /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div><button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button></div></article>)}</div>{visibleCount<filtered.length&&<div ref={sentinelRef} style={{height:'1px',width:'100%',pointerEvents:'none',margin:0,padding:0}} aria-hidden="true"/>}</section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label>{vendorId&&(
+  {demoMode&&(
+    <div className="sales-demo-bar" role="region" aria-label="Sales Demo PDF Toolbar">
+      <div className="sales-demo-bar-left">
+        <span className="sales-demo-badge">✨ Sales Demo Mode</span>
+        <span className="sales-demo-count">{Object.keys(demoSelected).length} design(s) selected</span>
+        {filtered.length>0&&(
+          <button type="button" className="quiet" style={{fontSize:'12px',padding:'4px 10px'}} onClick={selectAllFilteredForDemo}>
+            {filtered.every(p=>demoSelected[p.id])?'✕ Deselect Filtered':`✓ Select All Filtered (${filtered.length})`}
+          </button>
+        )}
+        {Object.keys(demoSelected).length>0&&(
+          <button type="button" className="quiet" style={{fontSize:'12px',padding:'4px 10px'}} onClick={clearDemoSelection}>
+            Clear Selection
+          </button>
+        )}
+      </div>
+      <div className="sales-demo-bar-actions">
+        <button
+          type="button"
+          className="sales-demo-btn-primary"
+          disabled={generatingPdf||Object.keys(demoSelected).length===0}
+          onClick={()=>void generateSalesDemoPdf()}
+        >
+          {generatingPdf?'Rendering High-Res PDF…':`📄 Generate Demo PDF (${Object.keys(demoSelected).length})`}
+        </button>
+        <button type="button" className="quiet" style={{fontSize:'12px',padding:'4px 10px'}} onClick={()=>setDemoMode(false)}>
+          ✕ Close
+        </button>
+      </div>
+    </div>
+  )}
+  <div className="grid">{visibleProducts.map(product=><article className={'product '+((selected[product.id]||demoSelected[product.id])?'chosen':'')} key={product.id}>{demoMode&&(<button type="button" className={`product-demo-badge ${demoSelected[product.id]?'selected':''}`} onClick={(e)=>{e.stopPropagation();toggleDemoItem(product.id)}} title={demoSelected[product.id]?'Remove from Sales Demo':'Include in Sales Demo'}>{demoSelected[product.id]?'✓ In Demo':'+ Add to Demo'}</button>)}<button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><img src={product.gridImage} alt={`${product.designCode} jewelry design`} loading="lazy" decoding="async" /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div>{demoMode?(<button className={`select ${demoSelected[product.id]?'active-demo':''}`} aria-pressed={Boolean(demoSelected[product.id])} onClick={()=>toggleDemoItem(product.id)}>{demoSelected[product.id]?'✓ In Demo':'Select for Demo'}</button>):(<button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button>)}</div></article>)}</div>{visibleCount<filtered.length&&<div ref={sentinelRef} style={{height:'1px',width:'100%',pointerEvents:'none',margin:0,padding:0}} aria-hidden="true"/>}</section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label>{vendorId&&(
 <div className="order-reps-section">
  <div className="order-reps-header">
   <span className="order-reps-title">Vendor Representative <span className="order-reps-subtitle">(Optional)</span></span>
@@ -1510,62 +1765,110 @@ export function App(){
       grams={grams}
     />
   )}
-   {pdfPreview && (
-    <div className="pdf-preview-backdrop" role="dialog" aria-modal="true" aria-label="Order PDF Preview">
-     <div className="pdf-preview-container">
-      <div className="pdf-preview-toolbar">
-       <div className="pdf-preview-toolbar-title">
-        <strong>{pdfPreview.fileName}</strong>
-        <span>
-         {(pdfPreview.blob.size / 1024).toFixed(1)} KB &middot; High-Resolution Order Sheet &middot; {pdfPreview.totalQuantity} pcs, {grams(pdfPreview.totalWeightMg)} g
-        </span>
+   {pdfModal && (() => {
+    const isOrder = pdfModal.type === 'order' && Boolean(pdfModal.orderData)
+    const isDemo = pdfModal.type === 'demo' && Boolean(pdfModal.demoPdf)
+
+    const currentPdf = isOrder
+      ? (pdfModal.orderData!.activeCopy === 'manufacturer' ? pdfModal.orderData!.manufacturer : pdfModal.orderData!.client)
+      : pdfModal.demoPdf!
+
+    return (
+     <div className="pdf-preview-backdrop" role="dialog" aria-modal="true" aria-label="PDF Preview">
+      <div className="pdf-preview-container">
+       <div className="pdf-preview-toolbar">
+        <div className="pdf-preview-toolbar-title">
+         {isOrder && (
+          <div className="pdf-copy-tabs" role="tablist" aria-label="Order PDF Copy Selector">
+           <button
+            type="button"
+            className={`pdf-copy-tab ${pdfModal.orderData!.activeCopy === 'client' ? 'active' : ''}`}
+            onClick={() => setPdfModal(prev => prev && prev.orderData ? {
+             ...prev,
+             orderData: { ...prev.orderData, activeCopy: 'client' }
+            } : prev)}
+           >
+            📄 Client Copy (Full Details)
+           </button>
+           <button
+            type="button"
+            className={`pdf-copy-tab ${pdfModal.orderData!.activeCopy === 'manufacturer' ? 'active' : ''}`}
+            onClick={() => setPdfModal(prev => prev && prev.orderData ? {
+             ...prev,
+             orderData: { ...prev.orderData, activeCopy: 'manufacturer' }
+            } : prev)}
+           >
+            🏭 Manufacturer Copy (Vendor Redacted)
+           </button>
+          </div>
+         )}
+         {isDemo && (
+          <strong style={{ color: '#ffd977', display: 'block', fontSize: '14px' }}>✨ High-Resolution Sales Demo Showcase</strong>
+         )}
+         <strong>{currentPdf.fileName}</strong>
+         <span>
+          {(currentPdf.blob.size / 1024).toFixed(1)} KB &middot; {isOrder ? (pdfModal.orderData!.activeCopy === 'manufacturer' ? 'Manufacturer Copy (Vendor details redacted)' : 'Official Client Order Sheet') : `${currentPdf.totalQuantity} Showcase Page(s)`} &middot; {currentPdf.totalQuantity} {isDemo ? 'designs' : 'pcs'}, {grams(currentPdf.totalWeightMg)} g
+         </span>
+        </div>
+        <div className="pdf-preview-actions">
+         <button
+          type="button"
+          className="primary"
+          onClick={() => downloadPdfBlob(currentPdf.blob, currentPdf.fileName)}
+         >
+          📥 Download PDF
+         </button>
+         <button
+          type="button"
+          className="quiet"
+          onClick={async () => {
+           const shared = await sharePdfFile(
+            currentPdf.blob,
+            currentPdf.fileName,
+            currentPdf.order,
+            currentPdf.fileName,
+            isDemo ? `Shine Jewels High-Resolution Sales Demo Showcase (${currentPdf.totalQuantity} designs)` : undefined
+           );
+           if (shared) {
+            setNotice('PDF shared successfully.');
+           } else {
+            downloadPdfBlob(currentPdf.blob, currentPdf.fileName);
+            setNotice('Native sharing not supported on this browser. File downloaded instead.');
+           }
+          }}
+         >
+          📤 Share PDF
+         </button>
+         <button
+          type="button"
+          className="close"
+          onClick={() => {
+           if (pdfModal.orderData) {
+            URL.revokeObjectURL(pdfModal.orderData.client.blobUrl);
+            URL.revokeObjectURL(pdfModal.orderData.manufacturer.blobUrl);
+           }
+           if (pdfModal.demoPdf) {
+            URL.revokeObjectURL(pdfModal.demoPdf.blobUrl);
+           }
+           setPdfModal(null);
+          }}
+          aria-label="Close PDF preview"
+         >
+          &times;
+         </button>
+        </div>
        </div>
-       <div className="pdf-preview-actions">
-        <button
-         type="button"
-         className="primary"
-         onClick={() => downloadPdfBlob(pdfPreview.blob, pdfPreview.fileName)}
-        >
-         📥 Download PDF
-        </button>
-        <button
-         type="button"
-         className="quiet"
-         onClick={async () => {
-          const shared = await sharePdfFile(pdfPreview.blob, pdfPreview.fileName, pdfPreview.order);
-          if (shared) {
-           setNotice('PDF shared successfully.');
-          } else {
-           downloadPdfBlob(pdfPreview.blob, pdfPreview.fileName);
-           setNotice('Native sharing not supported on this browser. File downloaded instead.');
-          }
-         }}
-        >
-         📤 Share PDF
-        </button>
-        <button
-         type="button"
-         className="close"
-         onClick={() => {
-          URL.revokeObjectURL(pdfPreview.blobUrl);
-          setPdfPreview(null);
-         }}
-         aria-label="Close PDF preview"
-        >
-         &times;
-        </button>
+       <div className="pdf-preview-body">
+        <iframe
+         className="pdf-preview-embed"
+         src={currentPdf.blobUrl}
+         title="PDF Preview"
+        />
        </div>
-      </div>
-      <div className="pdf-preview-body">
-       <iframe
-        className="pdf-preview-embed"
-        src={pdfPreview.blobUrl}
-        title="PDF Preview"
-       />
       </div>
      </div>
-    </div>
-   )}
+    )
+   })()}
    {editingProduct && (
     <EditProductModal
      product={editingProduct}
@@ -1583,4 +1886,5 @@ export function App(){
     />
    )}
   <footer>Built by Aadit Mehta, contact mail: <a href="mailto:aaditbusiness15@gmail.com">aaditbusiness15@gmail.com</a>, mobile: <a href="tel:7304767688">7304767688</a></footer></div>
+</>
 }
