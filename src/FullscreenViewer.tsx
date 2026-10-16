@@ -40,7 +40,6 @@ export function FullscreenViewer({
   const [zoom, setZoom] = useState<number>(1)
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
-  const [showRemarkInput, setShowRemarkInput] = useState(false)
   const [tapEffect, setTapEffect] = useState<{ show: boolean; selected: boolean }>({ show: false, selected: false })
 
   // Touch & gesture tracking refs
@@ -56,7 +55,6 @@ export function FullscreenViewer({
     setZoom(1)
     setPan({ x: 0, y: 0 })
     setIsPanning(false)
-    setShowRemarkInput(Boolean(selected[detail.id]?.remark))
   }, [detail.id])
 
   // Selected state for current detail item
@@ -401,33 +399,36 @@ export function FullscreenViewer({
         </button>
       )}
 
-      {/* 4. CORNER FLOATING QUICK EDIT & ORDER WIDGET */}
-      <aside className="fullscreen-quick-card">
-        <div className="quick-card-header">
-          <div>
-            <div className="quick-card-title-row">
-              <strong className="quick-card-code">{detail.designCode}</strong>
-              <span className="quick-card-fixed-weight" title="Fixed jewelry weight">{grams(detail.weightMg)} g</span>
-            </div>
-            <span className="quick-card-sub">{categoryName}{subcategoryName ? ` / ${subcategoryName}` : ''}</span>
+      {/* 4. STRAIGHT LINE BOTTOM RECTANGULAR DOCK */}
+      <footer className="fullscreen-bottom-dock" role="region" aria-label="Design selection and order controls">
+        <div className="fullscreen-bottom-bar">
+          {/* Design Identity & Weight */}
+          <div className="dock-meta">
+            <strong className="dock-code">{detail.designCode}</strong>
+            <span className="dock-weight" title="Jewelry weight">{grams(detail.weightMg)} g</span>
+            <span className="dock-category">{categoryName}{subcategoryName ? ` · ${subcategoryName}` : ''}</span>
           </div>
 
+          <div className="dock-divider" />
+
+          {/* Selection Action Button */}
           <button
             type="button"
-            className={`quick-card-select-btn ${isSelected ? 'active' : ''}`}
+            className={`dock-select-btn ${isSelected ? 'active' : ''}`}
             onClick={triggerTapSelect}
             aria-pressed={isSelected}
+            title={isSelected ? 'Remove from manufacturer order' : 'Select design for manufacturer order'}
           >
-            {isSelected ? '✓ Selected' : '+ Select Design'}
+            {isSelected ? '✓ In Order' : '+ Select Design'}
           </button>
-        </div>
 
-        <div className="quick-card-controls">
-          {/* Quantity Box */}
-          <div className="quick-control-group qty-group">
-            <label htmlFor="quick-qty-input">Qty</label>
+          <div className="dock-divider" />
+
+          {/* Quantity Field */}
+          <div className="dock-input-group dock-qty-group">
+            <label htmlFor="dock-qty-input">Qty</label>
             <input
-              id="quick-qty-input"
+              id="dock-qty-input"
               type="number"
               min="1"
               step="1"
@@ -438,48 +439,20 @@ export function FullscreenViewer({
             />
           </div>
 
-          {/* Optional Remark Section */}
-          <div className="quick-control-group remark-group">
-            <label>Remark</label>
-            {!showRemarkInput && !selectedItem?.remark ? (
-              <button
-                type="button"
-                className="quick-remark-toggle-btn"
-                onClick={() => setShowRemarkInput(true)}
-              >
-                💬 + Add optional remark
-              </button>
-            ) : (
-              <div className="quick-remark-input-box">
-                <input
-                  type="text"
-                  placeholder="Optional remark (e.g. 18K yellow gold, size 14)..."
-                  value={selectedItem?.remark || ''}
-                  onChange={handleRemarkChange}
-                  aria-label={`Remark for ${detail.designCode}`}
-                  autoFocus
-                />
-                {showRemarkInput && !selectedItem?.remark && (
-                  <button
-                    type="button"
-                    className="quick-remark-close-btn"
-                    onClick={() => setShowRemarkInput(false)}
-                    title="Close remark"
-                  >
-                    ✕
-                  </button>
-                )}
-              </div>
-            )}
+          {/* Remark Field */}
+          <div className="dock-input-group dock-remark-group">
+            <label htmlFor="dock-remark-input">Remark</label>
+            <input
+              id="dock-remark-input"
+              type="text"
+              placeholder="Optional remark (e.g. 18K yellow gold, size 14)..."
+              value={selectedItem?.remark || ''}
+              onChange={handleRemarkChange}
+              aria-label={`Remark for ${detail.designCode}`}
+            />
           </div>
         </div>
-
-        <div className="quick-card-footer">
-          <small>
-            💡 Tap image once to select/deselect. Pinch or double-tap to zoom in.
-          </small>
-        </div>
-      </aside>
+      </footer>
     </div>
   )
 }
