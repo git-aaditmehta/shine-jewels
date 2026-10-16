@@ -249,7 +249,7 @@ export function EditProductModal({
   )
 }
 
-export function ArchiveConfirmModal({
+export function DeleteConfirmModal({
   product,
   onConfirm,
   onClose
@@ -268,18 +268,18 @@ export function ArchiveConfirmModal({
       await onConfirm()
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to archive design.')
+      setError(err instanceof Error ? err.message : 'Failed to delete design.')
       setBusy(false)
     }
   }
 
   return (
-    <div className="product-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="archive-modal-title">
+    <div className="product-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
       <div className="product-modal-card" style={{ maxWidth: '520px' }}>
         <div className="product-modal-header">
           <div>
-            <p className="eyebrow" style={{ color: 'var(--danger)' }}>soft delete / archive</p>
-            <h2 id="archive-modal-title">Archive {product.designCode}?</h2>
+            <p className="eyebrow" style={{ color: 'var(--danger)', fontWeight: 600 }}>⚠️ PERMANENT DELETE</p>
+            <h2 id="delete-modal-title">Delete {product.designCode}?</h2>
           </div>
           <button type="button" className="close" onClick={onClose} aria-label="Close modal">×</button>
         </div>
@@ -293,12 +293,13 @@ export function ArchiveConfirmModal({
             </div>
           </div>
 
-          <p style={{ margin: '14px 0 8px', fontSize: '14px', lineHeight: 1.5 }}>
-            Archiving hides this design from the active sales catalogue and manufacturer orders.
+          <p style={{ margin: '14px 0 8px', fontSize: '14px', lineHeight: 1.5, color: 'var(--ink)' }}>
+            Are you sure you want to <strong>permanently delete</strong> this jewelry design?
           </p>
           <ul style={{ margin: '0 0 16px', paddingLeft: '20px', fontSize: '13px', color: 'var(--muted)', lineHeight: 1.6 }}>
-            <li>Existing finalized order history and PDFs will remain <strong>completely intact</strong>.</li>
-            <li>You can restore this design at any time from <strong>Catalogue Administration</strong>.</li>
+            <li>This design and its images will be <strong>completely removed from the cloud and this device</strong>.</li>
+            <li>This action <strong>cannot be undone</strong> (no archive).</li>
+            <li>Historical orders already finalized will preserve snapshot records.</li>
           </ul>
 
           {error && <p className="field-error" role="alert">{error}</p>}
@@ -311,13 +312,16 @@ export function ArchiveConfirmModal({
           <button
             type="button"
             className="primary danger-btn"
+            style={{ background: 'var(--danger)', borderColor: 'var(--danger)', color: '#fff' }}
             onClick={handleConfirm}
             disabled={busy}
           >
-            {busy ? 'Archiving…' : 'Archive Design'}
+            {busy ? 'Deleting…' : '🗑️ Delete Design'}
           </button>
         </div>
       </div>
     </div>
   )
 }
+
+export const ArchiveConfirmModal = DeleteConfirmModal

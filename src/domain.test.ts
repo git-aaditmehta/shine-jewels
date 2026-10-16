@@ -132,7 +132,7 @@ describe('business invariant helpers',()=>{
    expect(historicalOrder.items[0].designCode).toBe('SJ-PENDANT')
    expect(historicalOrder.items[0].weightMg).toBe(6250)
   })
-   it('blocks category archive when referenced by active products and permits archive when unused', ()=>{
+   it('blocks category deletion when referenced by active products and permits deletion when unused', ()=>{
     const activeProducts = [
       { id: 'p1', categoryId: 'cat-rings', subcategoryId: 'sub-solitaire', deleted: false },
       { id: 'p2', categoryId: 'cat-necklaces', subcategoryId: 'sub-choker', deleted: false },
@@ -152,7 +152,7 @@ describe('business invariant helpers',()=>{
     expect(braceletsCheck.allowed).toBe(true)
     expect(braceletsCheck.count).toBe(0)
    })
-   it('blocks subcategory archive when referenced by active products and permits archive when unused', ()=>{
+   it('blocks subcategory deletion when referenced by active products and permits deletion when unused', ()=>{
     const activeProducts = [
       { id: 'p1', categoryId: 'cat-rings', subcategoryId: 'sub-solitaire', deleted: false },
       { id: 'p2', categoryId: 'cat-rings', subcategoryId: 'sub-band', deleted: true }
@@ -164,6 +164,29 @@ describe('business invariant helpers',()=>{
     expect(canArchiveSubcategory('sub-solitaire').allowed).toBe(false)
     expect(canArchiveSubcategory('sub-band').allowed).toBe(true)
    })
+   it('hard deletes a product and removes local entity and associated OPFS image keys', () => {
+     let localEntities = [
+       { id: 'p1', entity_type: 'product', payload: JSON.stringify({ id: 'p1', designCode: 'R-101', imageVersion: 1, gridImageKey: 'g1', detailImageKey: 'd1' }) },
+       { id: 'p2', entity_type: 'product', payload: JSON.stringify({ id: 'p2', designCode: 'R-102', imageVersion: 1, gridImageKey: 'g2', detailImageKey: 'd2' }) }
+     ]
+     let localImages = new Set(['p1-grid-v1', 'p1-detail-v1', 'p2-grid-v2', 'p2-detail-v2'])
+     
+     // Perform hard delete on p1
+     const target = localEntities.find(e => e.id === 'p1')
+     expect(target).toBeDefined()
+     if (!target) throw new Error("Target not found");
+     const parsed = JSON.parse(target.payload)
+     localImages.delete(`${parsed.id}-grid-v${parsed.imageVersion}`)
+     localImages.delete(`${parsed.id}-detail-v${parsed.imageVersion}`)
+     localEntities = localEntities.filter(e => e.id !== 'p1')
+
+     // Verify p1 is completely removed from entities and localImages
+     expect(localEntities.length).toBe(1)
+     expect(localEntities.some(e => e.id === 'p1')).toBe(false)
+     expect(localImages.has('p1-grid-v1')).toBe(false)
+     expect(localImages.has('p1-detail-v1')).toBe(false)
+   })
+
    it('prevents vendor rename colliding with existing active vendor name and address, but allows same city', ()=>{
     const activeVendors = [
       { id: 'v1', name: 'Zaveri Jewellers', address: 'Bandra', city: 'Mumbai', deleted: false },

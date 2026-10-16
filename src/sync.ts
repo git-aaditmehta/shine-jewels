@@ -215,8 +215,8 @@ export async function uploadProductOnline(token: string, productId: string): Pro
 export async function push(token: string, operation: Awaited<ReturnType<typeof storage.pendingOperations>>[number]) {
   const payload = JSON.parse(operation.payload) as Record<string, unknown>
   if (operation.entity_type === 'category') {
-    if (operation.operation === 'ARCHIVE') {
-      return workerApi(`/categories/${payload.id}/archive`, { method: 'POST', token })
+    if (operation.operation === 'ARCHIVE' || operation.operation === 'DELETE') {
+      return workerApi(`/categories/${payload.id}`, { method: 'DELETE', token })
     }
     if (operation.operation === 'RESTORE') {
       return workerApi(`/categories/${payload.id}/restore`, { method: 'POST', token })
@@ -229,8 +229,8 @@ export async function push(token: string, operation: Awaited<ReturnType<typeof s
     return res
   }
   if (operation.entity_type === 'subcategory') {
-    if (operation.operation === 'ARCHIVE') {
-      return workerApi(`/subcategories/${payload.id}/archive`, { method: 'POST', token })
+    if (operation.operation === 'ARCHIVE' || operation.operation === 'DELETE') {
+      return workerApi(`/subcategories/${payload.id}`, { method: 'DELETE', token })
     }
     if (operation.operation === 'RESTORE') {
       return workerApi(`/subcategories/${payload.id}/restore`, { method: 'POST', token })
@@ -243,8 +243,8 @@ export async function push(token: string, operation: Awaited<ReturnType<typeof s
     return res
   }
   if (operation.entity_type === 'vendor') {
-    if (operation.operation === 'ARCHIVE') {
-      return workerApi(`/vendors/${payload.id}/archive`, { method: 'POST', token })
+    if (operation.operation === 'ARCHIVE' || operation.operation === 'DELETE') {
+      return workerApi(`/vendors/${payload.id}`, { method: 'DELETE', token })
     }
     if (operation.operation === 'RESTORE') {
       return workerApi(`/vendors/${payload.id}/restore`, { method: 'POST', token })
@@ -269,8 +269,8 @@ export async function push(token: string, operation: Awaited<ReturnType<typeof s
     return res
   }
   if (operation.entity_type === 'product') {
-    if (operation.operation === 'ARCHIVE') {
-      return workerApi(`/products/${payload.id}/archive`, { method: 'POST', token })
+    if (operation.operation === 'ARCHIVE' || operation.operation === 'DELETE') {
+      return workerApi(`/products/${payload.id}`, { method: 'DELETE', token })
     }
     if (operation.operation === 'RESTORE') {
       try {
@@ -389,7 +389,7 @@ export async function synchronize(token: string, onProgress?: (msg: string) => v
       await storage.applyRemoteChange({
         entityType: change.entity_type,
         entityId: change.entity_id,
-        operation: 'ARCHIVE',
+        operation: 'DELETE',
         payload: { id: change.entity_id }
       })
     } else {

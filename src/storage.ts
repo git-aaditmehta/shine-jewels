@@ -4,6 +4,7 @@ export type PendingOperation={id:string;idempotency_key:string;entity_type:strin
 export interface CatalogueStorage {
   products(): Promise<Product[]>
   archivedProducts(): Promise<Product[]>
+  deleteProduct(id: string): Promise<void>
   archiveProduct(id: string): Promise<void>
   restoreProduct(id: string): Promise<void>
   updateProduct(x: Product): Promise<void>
@@ -15,20 +16,25 @@ export interface CatalogueStorage {
   deleteImage(path: string): Promise<void>
   categories(): Promise<Category[]>
   archivedCategories(): Promise<Category[]>
+  canDeleteCategory(id: string): Promise<{ allowed: boolean; productCount: number }>
   canArchiveCategory(id: string): Promise<{ allowed: boolean; productCount: number }>
+  deleteCategory(id: string): Promise<{ ok: boolean; reason?: string }>
   archiveCategory(id: string): Promise<{ ok: boolean; reason?: string }>
   restoreCategory(id: string): Promise<void>
   updateCategory(x: Category): Promise<void>
   saveCategory(x: Category): Promise<void>
   subcategories(): Promise<Subcategory[]>
   archivedSubcategories(): Promise<Subcategory[]>
+  canDeleteSubcategory(id: string): Promise<{ allowed: boolean; productCount: number }>
   canArchiveSubcategory(id: string): Promise<{ allowed: boolean; productCount: number }>
+  deleteSubcategory(id: string): Promise<{ ok: boolean; reason?: string }>
   archiveSubcategory(id: string): Promise<{ ok: boolean; reason?: string }>
   restoreSubcategory(id: string): Promise<void>
   updateSubcategory(x: Subcategory): Promise<void>
   saveSubcategory(x: Subcategory): Promise<void>
   vendors(): Promise<Vendor[]>
   archivedVendors(): Promise<Vendor[]>
+  deleteVendor(id: string): Promise<void>
   archiveVendor(id: string): Promise<void>
   restoreVendor(id: string): Promise<void>
   updateVendor(x: Vendor): Promise<void>
@@ -205,16 +211,26 @@ class SqliteOpfsStorage implements CatalogueStorage {
     const items = (x.rows || []).map(r => JSON.parse((r as { payload: string }).payload) as Product)
     return this.resolveProductImages(items)
   }
-  async archiveProduct(id: string): Promise<void> {
+  async deleteProduct(id: string): Promise<void> {
     await this.ready
     const res = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?', ['product', id])
     const row = res.rows?.[0] as { payload: string } | undefined
     if (row) {
       const p = JSON.parse(row.payload) as Product
-      p.deleted = true
-      await this.db.execute('UPDATE local_entities SET payload=?, deleted=1, updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?', [JSON.stringify(p), 'product', id])
-      await this.db.queueOperation('product', 'ARCHIVE', { id })
+      const gridPath = `${p.id}-grid-v${p.imageVersion}`
+      const detailPath = `${p.id}-detail-v${p.imageVersion}`
+      await this.deleteImage(gridPath)
+      await this.deleteImage(detailPath)
+      if (p.gridImage && !p.gridImage.startsWith('data:') && !p.gridImage.startsWith('http')) await this.deleteImage(p.gridImage)
+      if (p.detailImage && !p.detailImage.startsWith('data:') && !p.detailImage.startsWith('http')) await this.deleteImage(p.detailImage)
+      await this.db.execute('DELETE FROM local_image_metadata WHERE product_id=?', [id])
+      await this.db.execute('DELETE FROM storage_accounting WHERE key LIKE ?', [`%${id}%`])
+      await this.db.execute('DELETE FROM local_entities WHERE entity_type=? AND id=?', ['product', id])
+      await this.db.queueOperation('product', 'DELETE', { id, gridImageKey: p.gridImageKey, detailImageKey: p.detailImageKey })
     }
+  }
+  async archiveProduct(id: string): Promise<void> {
+    return this.deleteProduct(id)
   }
   async restoreProduct(id: string): Promise<void> {
     await this.ready
@@ -250,27 +266,27 @@ class SqliteOpfsStorage implements CatalogueStorage {
     const x = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND deleted=1 ORDER BY updated_at DESC', ['category'])
     return (x.rows || []).map(r => JSON.parse((r as { payload: string }).payload) as Category)
   }
-  async canArchiveCategory(id: string): Promise<{ allowed: boolean; productCount: number }> {
+  async canDeleteCategory(id: string): Promise<{ allowed: boolean; productCount: number }> {
     await this.ready
     const activeProds = await this.products()
     const count = activeProds.filter(p => !p.deleted && p.categoryId === id).length
     return { allowed: count === 0, productCount: count }
   }
-  async archiveCategory(id: string): Promise<{ ok: boolean; reason?: string }> {
+  async canArchiveCategory(id: string): Promise<{ allowed: boolean; productCount: number }> {
+    return this.canDeleteCategory(id)
+  }
+  async deleteCategory(id: string): Promise<{ ok: boolean; reason?: string }> {
     await this.ready
-    const check = await this.canArchiveCategory(id)
+    const check = await this.canDeleteCategory(id)
     if (!check.allowed) {
-      return { ok: false, reason: `Cannot archive category: It is currently referenced by ${check.productCount} active design(s). Please reassign or archive those designs first.` }
+      return { ok: false, reason: `Cannot delete category: It is currently referenced by ${check.productCount} active design(s). Please delete those designs first.` }
     }
-    const res = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?', ['category', id])
-    const row = res.rows?.[0] as { payload: string } | undefined
-    if (row) {
-      const c = JSON.parse(row.payload) as Category
-      c.active = false
-      await this.db.execute('UPDATE local_entities SET payload=?, deleted=1, updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?', [JSON.stringify(c), 'category', id])
-      await this.db.queueOperation('category', 'ARCHIVE', { id })
-    }
+    await this.db.execute('DELETE FROM local_entities WHERE entity_type=? AND id=?', ['category', id])
+    await this.db.queueOperation('category', 'DELETE', { id })
     return { ok: true }
+  }
+  async archiveCategory(id: string): Promise<{ ok: boolean; reason?: string }> {
+    return this.deleteCategory(id)
   }
   async restoreCategory(id: string): Promise<void> {
     await this.ready
@@ -297,27 +313,27 @@ class SqliteOpfsStorage implements CatalogueStorage {
     const x = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND deleted=1 ORDER BY updated_at DESC', ['subcategory'])
     return (x.rows || []).map(r => JSON.parse((r as { payload: string }).payload) as Subcategory)
   }
-  async canArchiveSubcategory(id: string): Promise<{ allowed: boolean; productCount: number }> {
+  async canDeleteSubcategory(id: string): Promise<{ allowed: boolean; productCount: number }> {
     await this.ready
     const activeProds = await this.products()
     const count = activeProds.filter(p => !p.deleted && p.subcategoryId === id).length
     return { allowed: count === 0, productCount: count }
   }
-  async archiveSubcategory(id: string): Promise<{ ok: boolean; reason?: string }> {
+  async canArchiveSubcategory(id: string): Promise<{ allowed: boolean; productCount: number }> {
+    return this.canDeleteSubcategory(id)
+  }
+  async deleteSubcategory(id: string): Promise<{ ok: boolean; reason?: string }> {
     await this.ready
-    const check = await this.canArchiveSubcategory(id)
+    const check = await this.canDeleteSubcategory(id)
     if (!check.allowed) {
-      return { ok: false, reason: `Cannot archive subcategory: It is currently referenced by ${check.productCount} active design(s). Please reassign or archive those designs first.` }
+      return { ok: false, reason: `Cannot delete subcategory: It is currently referenced by ${check.productCount} active design(s). Please delete those designs first.` }
     }
-    const res = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?', ['subcategory', id])
-    const row = res.rows?.[0] as { payload: string } | undefined
-    if (row) {
-      const s = JSON.parse(row.payload) as Subcategory
-      s.active = false
-      await this.db.execute('UPDATE local_entities SET payload=?, deleted=1, updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?', [JSON.stringify(s), 'subcategory', id])
-      await this.db.queueOperation('subcategory', 'ARCHIVE', { id })
-    }
+    await this.db.execute('DELETE FROM local_entities WHERE entity_type=? AND id=?', ['subcategory', id])
+    await this.db.queueOperation('subcategory', 'DELETE', { id })
     return { ok: true }
+  }
+  async archiveSubcategory(id: string): Promise<{ ok: boolean; reason?: string }> {
+    return this.deleteSubcategory(id)
   }
   async restoreSubcategory(id: string): Promise<void> {
     await this.ready
@@ -353,16 +369,13 @@ class SqliteOpfsStorage implements CatalogueStorage {
     const x = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND deleted=1 ORDER BY updated_at DESC', ['vendor'])
     return (x.rows || []).map(r => JSON.parse((r as { payload: string }).payload) as Vendor)
   }
-  async archiveVendor(id: string): Promise<void> {
+  async deleteVendor(id: string): Promise<void> {
     await this.ready
-    const res = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?', ['vendor', id])
-    const row = res.rows?.[0] as { payload: string } | undefined
-    if (row) {
-      const v = JSON.parse(row.payload) as Vendor
-      v.deleted = true
-      await this.db.execute('UPDATE local_entities SET payload=?, deleted=1, updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?', [JSON.stringify(v), 'vendor', id])
-      await this.db.queueOperation('vendor', 'ARCHIVE', { id })
-    }
+    await this.db.execute('DELETE FROM local_entities WHERE entity_type=? AND id=?', ['vendor', id])
+    await this.db.queueOperation('vendor', 'DELETE', { id })
+  }
+  async archiveVendor(id: string): Promise<void> {
+    return this.deleteVendor(id)
   }
   async restoreVendor(id: string): Promise<void> {
     await this.ready
@@ -541,7 +554,7 @@ class SqliteOpfsStorage implements CatalogueStorage {
   await this.db.execute("DELETE FROM pending_operations WHERE entity_type='presentation' AND (payload LIKE ? OR id=?)",[`%"id":"${fromId}"%`,fromId]);
   await this.save('order',toId,updated);
  }
- async applyRemoteChange(x:{entityType:string;entityId:string;operation:string;payload:unknown}){await this.ready;if(x.operation==='ARCHIVE'||x.operation==='DELETE'){await this.db.execute('UPDATE local_entities SET deleted=1,updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?',[x.entityType,x.entityId]);return}const type=x.entityType==='presentation'?'order':x.entityType;const payload=x.payload as Record<string,unknown>;await this.save(type,x.entityId,{...payload,id:x.entityId})}
+ async applyRemoteChange(x:{entityType:string;entityId:string;operation:string;payload:unknown}){await this.ready;if(x.operation==='ARCHIVE'||x.operation==='DELETE'){if(x.entityType==='product'){const res=await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?',['product',x.entityId]);const row=res.rows?.[0] as {payload:string}|undefined;if(row){const p=JSON.parse(row.payload) as Product;await this.deleteImage(`${p.id}-grid-v${p.imageVersion}`);await this.deleteImage(`${p.id}-detail-v${p.imageVersion}`);}await this.db.execute('DELETE FROM local_image_metadata WHERE product_id=?',[x.entityId]);await this.db.execute('DELETE FROM storage_accounting WHERE key LIKE ?',[`%${x.entityId}%`]);}await this.db.execute('DELETE FROM local_entities WHERE entity_type=? AND id=?',[x.entityType,x.entityId]);return}const type=x.entityType==='presentation'?'order':x.entityType;const payload=x.payload as Record<string,unknown>;await this.save(type,x.entityId,{...payload,id:x.entityId})}
  async cacheRemoteImage(productId:string,representation:'grid'|'detail',url:string,version:number,expectedChecksum?:string,expectedSize?:number){
   const response=await fetch(url)
   if(!response.ok)throw new Error(`Image recovery download failed (${response.status})`)

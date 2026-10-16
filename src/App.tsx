@@ -32,8 +32,8 @@ import { createOrderPdfBlob, downloadPdfBlob, sharePdfFile, type GeneratedPdfRes
 import { storage } from './storage'
 import type { Category, DeviceSession, Order, Product, Session, StaffUser, Subcategory, Vendor, VendorRepresentative } from './types'
 import { BatchEntry, ProductEntry, Taxonomy } from './Management'
-import { EditProductModal, ArchiveConfirmModal } from './ProductModals'
-import { EditVendorModal, ArchiveVendorModal } from './VendorModals'
+import { EditProductModal, DeleteConfirmModal } from './ProductModals'
+import { EditVendorModal, DeleteVendorModal } from './VendorModals'
 import { FullscreenViewer } from './FullscreenViewer'
 
 const grams=(mg:number)=>(mg/1000).toFixed(3)
@@ -438,22 +438,27 @@ export function App(){
   }
   const handleConfirmArchive=async(product:Product)=>{
    try{
-    await storage.archiveProduct(product.id)
+    await storage.deleteProduct(product.id)
     await load()
-    setNotice(`${product.designCode} archived. You can view or restore it in Catalogue Administration.`)
-    const saved=sessionStorage.getItem(sessionKey)
-    const token=saved?(JSON.parse(saved) as {token:string}).token:''
-    if(navigator.onLine&&token){triggerBackgroundUpload()}
-   }catch(err){setNotice(err instanceof Error?`Failed to archive design: ${err.message}`:'Failed to archive design.')}
+    setNotice(`${product.designCode} permanently deleted from cloud and device.`)
+    const token=getStoredToken()
+    if(navigator.onLine&&token){
+      try{
+        await workerApi(`/products/${product.id}`,{method:'DELETE',token})
+        const pending=(await storage.pendingOperations()).find(op=>op.entity_type==='product'&&((JSON.parse(op.payload||'{}')as{id?:string}).id===product.id))
+        if(pending)await storage.completeOperation(pending.id)
+        await load()
+      }catch{
+        triggerBackgroundUpload()
+      }
+    }
+   }catch(err){setNotice(err instanceof Error?`Failed to delete design: ${err.message}`:'Failed to delete design.')}
   }
   const handleRestoreProduct=async(product:Product)=>{
    try{
     await storage.restoreProduct(product.id)
     await load()
-    setNotice(`${product.designCode} restored to active catalogue.`)
-    const saved=sessionStorage.getItem(sessionKey)
-    const token=saved?(JSON.parse(saved) as {token:string}).token:''
-    if(navigator.onLine&&token){triggerBackgroundUpload()}
+    setNotice(`${product.designCode} restored.`)
    }catch(err){setNotice(err instanceof Error?`Failed to restore design: ${err.message}`:'Failed to restore design.')}
   }
 
@@ -488,20 +493,29 @@ export function App(){
   }
   const handleArchiveVendor = async (vendor: Vendor) => {
    try {
-     await storage.archiveVendor(vendor.id)
+     await storage.deleteVendor(vendor.id)
      await load()
-     setNotice(`Vendor "${vendor.name}" archived. You can restore it anytime in the Archived Vendors tab.`)
-     triggerBackgroundUpload()
+     setNotice(`Vendor "${vendor.name}" permanently deleted from cloud and device.`)
+     const token = getStoredToken()
+     if(navigator.onLine&&token){
+       try{
+         await workerApi(`/vendors/${vendor.id}`,{method:'DELETE',token})
+         const pending=(await storage.pendingOperations()).find(op=>op.entity_type==='vendor'&&((JSON.parse(op.payload||'{}')as{id?:string}).id===vendor.id))
+         if(pending)await storage.completeOperation(pending.id)
+         await load()
+       }catch{
+         triggerBackgroundUpload()
+       }
+     }
    } catch (err) {
-     setNotice(err instanceof Error ? `Failed to archive vendor: ${err.message}` : 'Failed to archive vendor.')
+     setNotice(err instanceof Error ? `Failed to delete vendor: ${err.message}` : 'Failed to delete vendor.')
    }
   }
   const handleRestoreVendor = async (id: string) => {
    try {
      await storage.restoreVendor(id)
      await load()
-     setNotice('Vendor restored to active vendor directory.')
-     triggerBackgroundUpload()
+     setNotice('Vendor restored.')
    } catch (err) {
      setNotice(err instanceof Error ? `Failed to restore vendor: ${err.message}` : 'Failed to restore vendor.')
    }
@@ -519,24 +533,33 @@ export function App(){
   }
   const handleArchiveCategory = async (id: string) => {
    try {
-     const res = await storage.archiveCategory(id)
+     const res = await storage.deleteCategory(id)
      if (!res.ok) {
-       setNotice(res.reason || 'Cannot archive category.')
+       setNotice(res.reason || 'Cannot delete category.')
        return
      }
      await load()
-     setNotice('Category archived successfully.')
-     triggerBackgroundUpload()
+     setNotice('Category permanently deleted.')
+     const token = getStoredToken()
+     if(navigator.onLine&&token){
+       try{
+         await workerApi(`/categories/${id}`,{method:'DELETE',token})
+         const pending=(await storage.pendingOperations()).find(op=>op.entity_type==='category'&&((JSON.parse(op.payload||'{}')as{id?:string}).id===id))
+         if(pending)await storage.completeOperation(pending.id)
+         await load()
+       }catch{
+         triggerBackgroundUpload()
+       }
+     }
    } catch (err) {
-     setNotice(err instanceof Error ? `Failed to archive category: ${err.message}` : 'Failed to archive category.')
+     setNotice(err instanceof Error ? `Failed to delete category: ${err.message}` : 'Failed to delete category.')
    }
   }
   const handleRestoreCategory = async (id: string) => {
    try {
      await storage.restoreCategory(id)
      await load()
-     setNotice('Category restored to active taxonomy.')
-     triggerBackgroundUpload()
+     setNotice('Category restored.')
    } catch (err) {
      setNotice(err instanceof Error ? `Failed to restore category: ${err.message}` : 'Failed to restore category.')
    }
@@ -554,16 +577,26 @@ export function App(){
   }
   const handleArchiveSubcategory = async (id: string) => {
    try {
-     const res = await storage.archiveSubcategory(id)
+     const res = await storage.deleteSubcategory(id)
      if (!res.ok) {
-       setNotice(res.reason || 'Cannot archive subcategory.')
+       setNotice(res.reason || 'Cannot delete subcategory.')
        return
      }
      await load()
-     setNotice('Subcategory archived successfully.')
-     triggerBackgroundUpload()
+     setNotice('Subcategory permanently deleted.')
+     const token = getStoredToken()
+     if(navigator.onLine&&token){
+       try{
+         await workerApi(`/subcategories/${id}`,{method:'DELETE',token})
+         const pending=(await storage.pendingOperations()).find(op=>op.entity_type==='subcategory'&&((JSON.parse(op.payload||'{}')as{id?:string}).id===id))
+         if(pending)await storage.completeOperation(pending.id)
+         await load()
+       }catch{
+         triggerBackgroundUpload()
+       }
+     }
    } catch (err) {
-     setNotice(err instanceof Error ? `Failed to archive subcategory: ${err.message}` : 'Failed to archive subcategory.')
+     setNotice(err instanceof Error ? `Failed to delete subcategory: ${err.message}` : 'Failed to delete subcategory.')
    }
   }
   const handleRestoreSubcategory = async (id: string) => {
@@ -780,7 +813,7 @@ export function App(){
     )}
 
     {archivingVendor&&(
-     <ArchiveVendorModal
+     <DeleteVendorModal
       vendor={archivingVendor}
       onConfirm={()=>handleArchiveVendor(archivingVendor)}
       onClose={()=>setArchivingVendor(null)}
@@ -870,7 +903,7 @@ export function App(){
              style={{minHeight:'36px',padding:'0 12px',fontSize:'12px',color:'var(--danger)',borderColor:'var(--danger)'}}
              onClick={()=>setArchivingProduct(p)}
             >
-             🗑️ Archive
+             🗑️ Delete
             </button>
            </div>
           </div>
@@ -1542,7 +1575,7 @@ export function App(){
     />
    )}
    {archivingProduct && (
-    <ArchiveConfirmModal
+    <DeleteConfirmModal
      product={archivingProduct}
      onConfirm={() => handleConfirmArchive(archivingProduct)}
      onClose={() => setArchivingProduct(null)}

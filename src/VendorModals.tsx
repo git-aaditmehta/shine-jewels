@@ -120,51 +120,51 @@ export function EditVendorModal({ vendor, existingVendors, onSave, onClose }: Ed
   )
 }
 
-interface ArchiveVendorModalProps {
+interface DeleteVendorModalProps {
   vendor: Vendor
   onConfirm: () => Promise<void>
   onClose: () => void
 }
 
-export function ArchiveVendorModal({ vendor, onConfirm, onClose }: ArchiveVendorModalProps) {
-  const [archiving, setArchiving] = useState(false)
+export function DeleteVendorModal({ vendor, onConfirm, onClose }: DeleteVendorModalProps) {
+  const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState('')
 
   const handleConfirm = async () => {
-    setArchiving(true)
+    setDeleting(true)
     setError('')
     try {
       await onConfirm()
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to archive vendor.')
+      setError(err instanceof Error ? err.message : 'Failed to delete vendor.')
     } finally {
-      setArchiving(false)
+      setDeleting(false)
     }
   }
 
   return (
-    <div className="product-edit-modal-backdrop" role="dialog" aria-modal="true" aria-label="Archive Vendor Confirmation">
+    <div className="product-edit-modal-backdrop" role="dialog" aria-modal="true" aria-label="Delete Vendor Confirmation">
       <div className="product-edit-modal-card" style={{ maxWidth: '480px' }}>
         <div className="product-edit-modal-header">
           <div>
-            <p className="eyebrow">archive vendor</p>
-            <h2>Archive {vendor.name}?</h2>
+            <p className="eyebrow" style={{ color: 'var(--danger)', fontWeight: 600 }}>⚠️ PERMANENT DELETE</p>
+            <h2>Delete {vendor.name}?</h2>
           </div>
-          <button type="button" className="close" onClick={onClose} aria-label="Close archive dialog">×</button>
+          <button type="button" className="close" onClick={onClose} aria-label="Close dialog">×</button>
         </div>
 
         {error && <p className="field-error" role="alert">{error}</p>}
 
         <p style={{ fontSize: '14px', lineHeight: 1.6, color: 'var(--ink)' }}>
-          Archiving <strong>{vendor.name} ({vendor.city})</strong> hides this vendor from new order creation trays.
+          Are you sure you want to <strong>permanently delete</strong> vendor <strong>{vendor.name} ({vendor.city})</strong>?
         </p>
         <p className="muted" style={{ fontSize: '13px', lineHeight: 1.5, marginTop: '8px' }}>
-          Historical orders, order previews, and generated manufacturer PDFs retain all vendor details intact. You can restore this vendor at any time from the <em>Archived Vendors</em> tab.
+          This will completely remove this vendor from the cloud and all devices. This action <strong>cannot be undone</strong>. Existing finalized historical orders will retain their snapshot details.
         </p>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', marginTop: 'var(--space-4)' }}>
-          <button type="button" className="quiet" onClick={onClose} disabled={archiving}>
+          <button type="button" className="quiet" onClick={onClose} disabled={deleting}>
             Cancel
           </button>
           <button
@@ -172,12 +172,14 @@ export function ArchiveVendorModal({ vendor, onConfirm, onClose }: ArchiveVendor
             className="primary"
             style={{ background: 'var(--danger)', borderColor: 'var(--danger)', color: '#fff' }}
             onClick={handleConfirm}
-            disabled={archiving}
+            disabled={deleting}
           >
-            {archiving ? 'Archiving…' : '🗑️ Archive Vendor'}
+            {deleting ? 'Deleting…' : '🗑️ Delete Vendor'}
           </button>
         </div>
       </div>
     </div>
   )
 }
+
+export const ArchiveVendorModal = DeleteVendorModal

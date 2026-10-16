@@ -435,7 +435,7 @@ export function Taxonomy({
                           style={{ minHeight: '32px', padding: '0 10px', fontSize: '12px', color: 'var(--danger)', borderColor: 'var(--danger)' }}
                           onClick={() => handleStartArchiveCategory(c)}
                         >
-                          🗑️ Archive
+                          🗑️ Delete
                         </button>
                       </div>
                     </div>
@@ -465,7 +465,7 @@ export function Taxonomy({
                                   className="quiet"
                                   style={{ minHeight: '24px', padding: '0 6px', fontSize: '11px', border: 'none', color: 'var(--danger)' }}
                                   onClick={() => handleStartArchiveSubcategory(s)}
-                                  title="Archive subcategory"
+                                  title="Delete subcategory"
                                 >
                                   🗑️
                                 </button>

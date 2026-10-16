@@ -78,39 +78,41 @@ export function EditCategoryModal({ category, existingCategories, onSave, onClos
   )
 }
 
-interface ArchiveCategoryModalProps {
+interface DeleteCategoryModalProps {
   category: Category
   productCount: number
   onConfirm: () => Promise<void>
   onClose: () => void
 }
 
-export function ArchiveCategoryModal({ category, productCount, onConfirm, onClose }: ArchiveCategoryModalProps) {
-  const [archiving, setArchiving] = useState(false)
+export function DeleteCategoryModal({ category, productCount, onConfirm, onClose }: DeleteCategoryModalProps) {
+  const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState('')
 
   const handleConfirm = async () => {
-    setArchiving(true)
+    setDeleting(true)
     setError('')
     try {
       await onConfirm()
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to archive category.')
+      setError(err instanceof Error ? err.message : 'Failed to delete category.')
     } finally {
-      setArchiving(false)
+      setDeleting(false)
     }
   }
 
   const isBlocked = productCount > 0
 
   return (
-    <div className="product-edit-modal-backdrop" role="dialog" aria-modal="true" aria-label="Archive Category">
+    <div className="product-edit-modal-backdrop" role="dialog" aria-modal="true" aria-label="Delete Category">
       <div className="product-edit-modal-card" style={{ maxWidth: '480px' }}>
         <div className="product-edit-modal-header">
           <div>
-            <p className="eyebrow">{isBlocked ? 'archival blocked' : 'archive category'}</p>
-            <h2>{isBlocked ? `Cannot Archive "${category.name}"` : `Archive "${category.name}"?`}</h2>
+            <p className="eyebrow" style={isBlocked ? { color: 'var(--danger)', fontWeight: 600 } : { color: 'var(--danger)', fontWeight: 600 }}>
+              {isBlocked ? '⚠️ DELETION BLOCKED' : '⚠️ PERMANENT DELETE'}
+            </p>
+            <h2>{isBlocked ? `Cannot Delete "${category.name}"` : `Delete "${category.name}"?`}</h2>
           </div>
           <button type="button" className="close" onClick={onClose} aria-label="Close dialog">×</button>
         </div>
@@ -124,7 +126,7 @@ export function ArchiveCategoryModal({ category, productCount, onConfirm, onClos
                 ⚠️ Active Catalogue Dependency Detected
               </strong>
               <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.5, color: 'var(--ink)' }}>
-                This category is currently referenced by <strong>{productCount} active design(s)</strong> in your sales catalogue. To maintain catalogue integrity, you must reassign or archive those designs first before archiving this category.
+                This category is currently referenced by <strong>{productCount} active design(s)</strong> in your sales catalogue. To maintain catalogue integrity, you cannot delete a category that has designs in it. Please delete or reassign those designs first.
               </p>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-3)' }}>
@@ -136,13 +138,13 @@ export function ArchiveCategoryModal({ category, productCount, onConfirm, onClos
         ) : (
           <div>
             <p style={{ fontSize: '14px', lineHeight: 1.6, color: 'var(--ink)' }}>
-              Are you sure you want to archive <strong>{category.name}</strong>?
+              Are you sure you want to <strong>permanently delete</strong> category <strong>{category.name}</strong>?
             </p>
             <p className="muted" style={{ fontSize: '13px', lineHeight: 1.5, marginTop: '8px' }}>
-              Archiving removes this category from filter bars and new design entry forms. You can restore it anytime from the <em>Archived Taxonomy</em> tab.
+              This category has 0 designs attached. It will be completely removed from the cloud and all devices. This action <strong>cannot be undone</strong>.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', marginTop: 'var(--space-4)' }}>
-              <button type="button" className="quiet" onClick={onClose} disabled={archiving}>
+              <button type="button" className="quiet" onClick={onClose} disabled={deleting}>
                 Cancel
               </button>
               <button
@@ -150,9 +152,9 @@ export function ArchiveCategoryModal({ category, productCount, onConfirm, onClos
                 className="primary"
                 style={{ background: 'var(--danger)', borderColor: 'var(--danger)', color: '#fff' }}
                 onClick={handleConfirm}
-                disabled={archiving}
+                disabled={deleting}
               >
-                {archiving ? 'Archiving…' : '🗑️ Archive Category'}
+                {deleting ? 'Deleting…' : '🗑️ Delete Category'}
               </button>
             </div>
           </div>
@@ -161,6 +163,8 @@ export function ArchiveCategoryModal({ category, productCount, onConfirm, onClos
     </div>
   )
 }
+
+export const ArchiveCategoryModal = DeleteCategoryModal
 
 interface EditSubcategoryModalProps {
   subcategory: Subcategory
@@ -239,39 +243,41 @@ export function EditSubcategoryModal({ subcategory, existingSubcategories, onSav
   )
 }
 
-interface ArchiveSubcategoryModalProps {
+interface DeleteSubcategoryModalProps {
   subcategory: Subcategory
   productCount: number
   onConfirm: () => Promise<void>
   onClose: () => void
 }
 
-export function ArchiveSubcategoryModal({ subcategory, productCount, onConfirm, onClose }: ArchiveSubcategoryModalProps) {
-  const [archiving, setArchiving] = useState(false)
+export function DeleteSubcategoryModal({ subcategory, productCount, onConfirm, onClose }: DeleteSubcategoryModalProps) {
+  const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState('')
 
   const handleConfirm = async () => {
-    setArchiving(true)
+    setDeleting(true)
     setError('')
     try {
       await onConfirm()
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to archive subcategory.')
+      setError(err instanceof Error ? err.message : 'Failed to delete subcategory.')
     } finally {
-      setArchiving(false)
+      setDeleting(false)
     }
   }
 
   const isBlocked = productCount > 0
 
   return (
-    <div className="product-edit-modal-backdrop" role="dialog" aria-modal="true" aria-label="Archive Subcategory">
+    <div className="product-edit-modal-backdrop" role="dialog" aria-modal="true" aria-label="Delete Subcategory">
       <div className="product-edit-modal-card" style={{ maxWidth: '480px' }}>
         <div className="product-edit-modal-header">
           <div>
-            <p className="eyebrow">{isBlocked ? 'archival blocked' : 'archive subcategory'}</p>
-            <h2>{isBlocked ? `Cannot Archive "${subcategory.name}"` : `Archive "${subcategory.name}"?`}</h2>
+            <p className="eyebrow" style={{ color: 'var(--danger)', fontWeight: 600 }}>
+              {isBlocked ? '⚠️ DELETION BLOCKED' : '⚠️ PERMANENT DELETE'}
+            </p>
+            <h2>{isBlocked ? `Cannot Delete "${subcategory.name}"` : `Delete "${subcategory.name}"?`}</h2>
           </div>
           <button type="button" className="close" onClick={onClose} aria-label="Close dialog">×</button>
         </div>
@@ -285,7 +291,7 @@ export function ArchiveSubcategoryModal({ subcategory, productCount, onConfirm, 
                 ⚠️ Active Catalogue Dependency Detected
               </strong>
               <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.5, color: 'var(--ink)' }}>
-                This subcategory is currently referenced by <strong>{productCount} active design(s)</strong> in your catalogue. To maintain catalogue integrity, you must reassign or archive those designs first before archiving this subcategory.
+                This subcategory is currently referenced by <strong>{productCount} active design(s)</strong> in your catalogue. To maintain catalogue integrity, you cannot delete a subcategory that has designs in it. Please delete or reassign those designs first.
               </p>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-3)' }}>
@@ -297,13 +303,13 @@ export function ArchiveSubcategoryModal({ subcategory, productCount, onConfirm, 
         ) : (
           <div>
             <p style={{ fontSize: '14px', lineHeight: 1.6, color: 'var(--ink)' }}>
-              Are you sure you want to archive <strong>{subcategory.name}</strong>?
+              Are you sure you want to <strong>permanently delete</strong> subcategory <strong>{subcategory.name}</strong>?
             </p>
             <p className="muted" style={{ fontSize: '13px', lineHeight: 1.5, marginTop: '8px' }}>
-              Archiving removes this subcategory from filter bars and new design entry forms. You can restore it anytime from the <em>Archived Taxonomy</em> tab.
+              This subcategory has 0 designs attached. It will be completely removed from the cloud and all devices. This action <strong>cannot be undone</strong>.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', marginTop: 'var(--space-4)' }}>
-              <button type="button" className="quiet" onClick={onClose} disabled={archiving}>
+              <button type="button" className="quiet" onClick={onClose} disabled={deleting}>
                 Cancel
               </button>
               <button
@@ -311,9 +317,9 @@ export function ArchiveSubcategoryModal({ subcategory, productCount, onConfirm, 
                 className="primary"
                 style={{ background: 'var(--danger)', borderColor: 'var(--danger)', color: '#fff' }}
                 onClick={handleConfirm}
-                disabled={archiving}
+                disabled={deleting}
               >
-                {archiving ? 'Archiving…' : '🗑️ Archive Subcategory'}
+                {deleting ? 'Deleting…' : '🗑️ Delete Subcategory'}
               </button>
             </div>
           </div>
@@ -322,3 +328,5 @@ export function ArchiveSubcategoryModal({ subcategory, productCount, onConfirm, 
     </div>
   )
 }
+
+export const ArchiveSubcategoryModal = DeleteSubcategoryModal
