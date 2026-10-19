@@ -1714,85 +1714,7 @@ footer a {
    Floating Top-Right Manufacturer Order Icon & Slide-Over Drawer
    ========================================================================== */
 
-/* Top-Right Floating Order Capsule Button */
-.order-floating-trigger {
-  position: fixed;
-  top: 16px;
-  right: 18px;
-  z-index: 120;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 42px;
-  padding: 0 14px 0 12px;
-  background: rgba(18, 14, 10, 0.94);
-  border: 1.5px solid rgba(212, 160, 58, 0.45);
-  border-radius: 99px;
-  color: #f7f4ed;
-  font-family: var(--font-body);
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  transition: all 180ms ease;
-  user-select: none;
-}
 
-.order-floating-trigger:hover {
-  border-color: #ffd977;
-  transform: translateY(-1px);
-  box-shadow: 0 6px 22px rgba(212, 160, 58, 0.4);
-}
-
-.order-floating-trigger.has-items {
-  border-color: #d4a03a;
-  background: rgba(24, 18, 12, 0.96);
-  box-shadow: 0 4px 20px rgba(212, 160, 58, 0.35);
-}
-
-.order-trigger-icon {
-  font-size: 16px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-}
-
-.order-trigger-text {
-  letter-spacing: 0.02em;
-  color: #f7f4ed;
-}
-
-.order-trigger-badge {
-  background: linear-gradient(135deg, #c8951b 0%, #f1c968 100%);
-  color: #0c0906;
-  font-size: 11px;
-  font-weight: 800;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 99px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-}
-
-.order-floating-trigger.drawer-open {
-  background: #d4a03a;
-  color: #0c0906;
-  border-color: #ffd977;
-}
-
-.order-floating-trigger.drawer-open .order-trigger-text {
-  color: #0c0906;
-}
-
-.order-floating-trigger.drawer-open .order-trigger-badge {
-  background: #0c0906;
-  color: #ffd977;
-}
 
 /* Slide-Over Drawer Overlay */
 .order-drawer-backdrop {
@@ -2018,14 +1940,7 @@ header .session-actions {
   .header-order-text {
     display: none;
   }
-  .order-floating-trigger {
-    top: auto;
-    bottom: 20px;
-    right: 16px;
-    min-height: 40px;
-    padding: 0 12px;
-    font-size: 12px;
-  }
+
   .order-drawer-panel {
     max-width: 100%;
   }

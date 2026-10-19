@@ -830,20 +830,7 @@ export function App(){
   <div className="brand-watermark-overlay" aria-hidden="true" />
   {logoModalOpen && <LogoLightboxModal onClose={() => setLogoModalOpen(false)} />}
 
-  {/* Top-Right Floating Manufacturer Order Icon */}
-  {view === 'catalogue' && !detail && (
-    <button
-      type="button"
-      className={`order-floating-trigger ${cart.length > 0 ? 'has-items' : ''} ${orderDrawerOpen ? 'drawer-open' : ''}`}
-      onClick={() => setOrderDrawerOpen(open => !open)}
-      aria-label={`Manufacturer order: ${cart.length} design(s) selected`}
-      title={orderDrawerOpen ? 'Minimize manufacturer order' : `Manufacturer order (${cart.length} designs)`}
-    >
-      <span className="order-trigger-icon" aria-hidden="true">📋</span>
-      <span className="order-trigger-text">Order</span>
-      <span className="order-trigger-badge">{cart.length}</span>
-    </button>
-  )}
+
 
   {/* Expandable Manufacturer Order Slide-Over Drawer */}
   {orderDrawerOpen && view === 'catalogue' && (
