@@ -1566,3 +1566,273 @@ footer a {
   box-shadow: 0 2px 8px rgba(212, 160, 58, 0.4);
 }
 
+/* ==========================================================================
+   Floating Top-Right Manufacturer Order Icon & Slide-Over Drawer
+   ========================================================================== */
+
+/* Top-Right Floating Order Capsule Button */
+.order-floating-trigger {
+  position: fixed;
+  top: 16px;
+  right: 18px;
+  z-index: 120;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 14px 0 12px;
+  background: rgba(18, 14, 10, 0.94);
+  border: 1.5px solid rgba(212, 160, 58, 0.45);
+  border-radius: 99px;
+  color: #f7f4ed;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transition: all 180ms ease;
+  user-select: none;
+}
+
+.order-floating-trigger:hover {
+  border-color: #ffd977;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 22px rgba(212, 160, 58, 0.4);
+}
+
+.order-floating-trigger.has-items {
+  border-color: #d4a03a;
+  background: rgba(24, 18, 12, 0.96);
+  box-shadow: 0 4px 20px rgba(212, 160, 58, 0.35);
+}
+
+.order-trigger-icon {
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+}
+
+.order-trigger-text {
+  letter-spacing: 0.02em;
+  color: #f7f4ed;
+}
+
+.order-trigger-badge {
+  background: linear-gradient(135deg, #c8951b 0%, #f1c968 100%);
+  color: #0c0906;
+  font-size: 11px;
+  font-weight: 800;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 99px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+.order-floating-trigger.drawer-open {
+  background: #d4a03a;
+  color: #0c0906;
+  border-color: #ffd977;
+}
+
+.order-floating-trigger.drawer-open .order-trigger-text {
+  color: #0c0906;
+}
+
+.order-floating-trigger.drawer-open .order-trigger-badge {
+  background: #0c0906;
+  color: #ffd977;
+}
+
+/* Slide-Over Drawer Overlay */
+.order-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 6, 4, 0.75);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 999;
+  animation: fadeIn 180ms ease;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.order-drawer-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  max-width: 460px;
+  background: rgba(14, 11, 8, 0.98);
+  border-left: 1.5px solid rgba(212, 160, 58, 0.35);
+  box-shadow: -16px 0 48px rgba(0, 0, 0, 0.85);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideDrawerIn 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideDrawerIn {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.order-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: rgba(22, 16, 11, 0.96);
+  border-bottom: 1px solid rgba(212, 160, 58, 0.25);
+  gap: 12px;
+}
+
+.order-drawer-header-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.order-drawer-eyebrow {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #d4a03a;
+  margin: 0 0 2px 0;
+}
+
+.order-drawer-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 19px;
+  color: #ffffff;
+  line-height: 1.2;
+}
+
+.order-drawer-subtitle {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.order-drawer-minimize-btn {
+  background: rgba(36, 26, 17, 0.85);
+  border: 1.5px solid rgba(212, 160, 58, 0.45);
+  color: #ffd977 !important;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 160ms ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.order-drawer-minimize-btn:hover {
+  background: rgba(212, 160, 58, 0.2);
+  border-color: #ffd977;
+  transform: scale(1.04);
+}
+
+.order-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.order-drawer-body label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  display: grid;
+  gap: 6px;
+}
+
+.order-drawer-body select,
+.order-drawer-body input {
+  background: rgba(24, 18, 12, 0.85);
+  border: 1px solid rgba(212, 160, 58, 0.3);
+  color: #f7f4ed;
+  border-radius: 8px;
+}
+
+.order-drawer-body select:focus,
+.order-drawer-body input:focus {
+  border-color: #d4a03a;
+  outline: none;
+}
+
+.order-drawer-body .order-reps-section {
+  margin-top: 4px;
+}
+
+.order-drawer-body .cart {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
+.order-drawer-footer {
+  padding: 16px 20px calc(16px + env(safe-area-inset-bottom));
+  background: rgba(20, 15, 10, 0.98);
+  border-top: 1px solid rgba(212, 160, 58, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.order-drawer-footer .total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+  color: #f7f4ed;
+  padding-bottom: 4px;
+}
+
+.order-drawer-footer .total strong {
+  font-size: 18px;
+  color: #ffd977;
+}
+
+/* Ensure session actions in header leave breathing space for top-right button */
+header .session-actions {
+  margin-right: 130px;
+}
+
+@media(max-width: 768px) {
+  header .session-actions {
+    margin-right: 110px;
+  }
+  .order-floating-trigger {
+    top: 12px;
+    right: 12px;
+    min-height: 38px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+  .order-drawer-panel {
+    max-width: 100%;
+  }
+}
+

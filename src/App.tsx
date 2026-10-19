@@ -206,6 +206,7 @@ export function App(){
  const [logoModalOpen,setLogoModalOpen]=useState(false)
  const [demoMode,setDemoMode]=useState(false)
  const [demoSelected,setDemoSelected]=useState<Record<string,boolean>>({})
+ const [orderDrawerOpen,setOrderDrawerOpen]=useState(false)
  const [pdfModal,setPdfModal]=useState<{
    type: 'order' | 'demo'
    orderData?: {
@@ -810,10 +811,164 @@ export function App(){
     return () => { delete document.body.dataset.view }
   }, [view])
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && orderDrawerOpen) {
+        setOrderDrawerOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [orderDrawerOpen])
+
+  useEffect(() => {
+    if (view !== 'catalogue') setOrderDrawerOpen(false)
+  }, [view])
+
   const logout=()=>{sessionStorage.removeItem(sessionKey);localStorage.removeItem(sessionKey);void storage.clearSession();setSession(null)}
   return <>
   <div className="brand-watermark-overlay" aria-hidden="true" />
   {logoModalOpen && <LogoLightboxModal onClose={() => setLogoModalOpen(false)} />}
+
+  {/* Top-Right Floating Manufacturer Order Icon */}
+  {view === 'catalogue' && (
+    <button
+      type="button"
+      className={`order-floating-trigger ${cart.length > 0 ? 'has-items' : ''} ${orderDrawerOpen ? 'drawer-open' : ''}`}
+      onClick={() => setOrderDrawerOpen(open => !open)}
+      aria-label={`Manufacturer order: ${cart.length} design(s) selected`}
+      title={orderDrawerOpen ? 'Minimize manufacturer order' : `Manufacturer order (${cart.length} designs)`}
+    >
+      <span className="order-trigger-icon" aria-hidden="true">📋</span>
+      <span className="order-trigger-text">Order</span>
+      <span className="order-trigger-badge">{cart.length}</span>
+    </button>
+  )}
+
+  {/* Expandable Manufacturer Order Slide-Over Drawer */}
+  {orderDrawerOpen && view === 'catalogue' && (
+    <div
+      className="order-drawer-backdrop"
+      onClick={() => setOrderDrawerOpen(false)}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Manufacturer Order Drawer"
+    >
+      <div className="order-drawer-panel" onClick={e => e.stopPropagation()}>
+        <div className="order-drawer-header">
+          <div className="order-drawer-header-info">
+            <span className="order-drawer-eyebrow">Manufacturer Order</span>
+            <h2 className="order-drawer-title">{cart.length ? `${cart.length} design(s) selected` : 'Start with a vendor'}</h2>
+            <span className="order-drawer-subtitle">{cart.length} designs · {grams(total)} g total</span>
+          </div>
+          <button
+            type="button"
+            className="order-drawer-minimize-btn"
+            onClick={() => setOrderDrawerOpen(false)}
+            aria-label="Minimize order drawer"
+            title="Minimize order drawer"
+          >
+            ✕ Minimize
+          </button>
+        </div>
+
+        <div className="order-drawer-body">
+          <label>Vendor
+            <select value={vendorId} onChange={e => setVendorId(e.target.value)}>
+              <option value="">Choose vendor</option>
+              {vendors.map(v => <option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}
+            </select>
+          </label>
+
+          {vendorId && (
+            <div className="order-reps-section">
+              <div className="order-reps-header">
+                <span className="order-reps-title">Vendor Representative <span className="order-reps-subtitle">(Optional)</span></span>
+                <button type="button" className="order-rep-add-btn" onClick={() => setVendorRepresentatives(r => [...r, { name: '', phone: '' }])}>+ Add person</button>
+              </div>
+              {vendorRepresentatives.map((rep, idx) => (
+                <div className="order-rep-card" key={idx}>
+                  <div className="order-rep-card-top">
+                    <span>Person {idx + 1}</span>
+                    {vendorRepresentatives.length > 1 && (
+                      <button type="button" className="order-rep-del-btn" aria-label={`Remove representative ${idx + 1}`} onClick={() => setVendorRepresentatives(r => r.filter((_, i) => i !== idx))}>✕ Remove</button>
+                    )}
+                  </div>
+                  <div className="order-rep-fields">
+                    <input
+                      type="text"
+                      placeholder="Name"
+                      value={rep.name}
+                      aria-label={`Representative ${idx + 1} name`}
+                      onChange={e => {
+                        const val = e.target.value
+                        setVendorRepresentatives(r => r.map((item, i) => i === idx ? { ...item, name: val } : item))
+                      }}
+                    />
+                    <input
+                      type="tel"
+                      placeholder="Phone number"
+                      value={rep.phone}
+                      aria-label={`Representative ${idx + 1} phone number`}
+                      onChange={e => {
+                        const val = e.target.value
+                        setVendorRepresentatives(r => r.map((item, i) => i === idx ? { ...item, phone: val } : item))
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="line" />
+
+          {cart.length === 0 ? (
+            <p className="muted">Select designs from the catalogue. They will appear here in real time.</p>
+          ) : (
+            <div className="cart">
+              {cart.map(p => (
+                <div className="cart-item" key={p.id}>
+                  <img src={p.gridImage} alt={p.designCode} />
+                  <div className="cart-item-body">
+                    <div className="cart-item-header">
+                      <div><strong>{p.designCode}</strong><span>{grams(p.weightMg)} g</span></div>
+                      <button type="button" className="cart-item-remove-btn" onClick={() => removeFromOrder(p.id)} aria-label={`Remove ${p.designCode} from order`} title={`Remove ${p.designCode} from order`}>✕</button>
+                    </div>
+                    <label>Qty
+                      <input aria-label={`Quantity for ${p.designCode}`} type="number" min="1" step="1" placeholder="1" value={selected[p.id].quantity} onChange={e => change(p.id, 'quantity', e.target.value)} />
+                    </label>
+                    <input aria-label={`Remark for ${p.designCode}`} value={selected[p.id].remark} onChange={e => change(p.id, 'remark', e.target.value)} placeholder="Optional remark" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="order-drawer-footer">
+          <div className="total">
+            <span>Total weight</span>
+            <strong>{grams(total)} g</strong>
+          </div>
+          <button
+            className="primary"
+            disabled={generatingPdf || cart.length === 0}
+            onClick={() => {
+              setOrderDrawerOpen(false);
+              void makeOrder();
+            }}
+          >
+            {generatingPdf ? 'Generating PDF preview…' : 'Finalize & generate PDF'}
+          </button>
+          <small className="muted" style={{ textAlign: 'center', fontSize: '11px' }}>
+            PDF is generated locally. Cloud sync follows when connected.
+          </small>
+        </div>
+      </div>
+    </div>
+  )}
+
   <div className="app-shell">
     <header>
       <div className="brand">
