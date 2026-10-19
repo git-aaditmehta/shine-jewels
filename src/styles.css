@@ -306,8 +306,9 @@
 .fullscreen-header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   pointer-events: auto;
+  flex-shrink: 0;
 }
 
 .fullscreen-zoom-toolbar {
@@ -318,6 +319,7 @@
   border-radius: 99px;
   padding: 3px 6px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  flex-shrink: 0;
 }
 
 .zoom-tool-btn {
@@ -360,9 +362,63 @@
   color: #ffd977;
 }
 
+/* Integrated Fullscreen Order Drawer Trigger */
+.fullscreen-order-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 12px;
+  background: rgba(26, 20, 14, 0.92);
+  border: 1.5px solid rgba(212, 160, 58, 0.45);
+  border-radius: 99px;
+  color: #ffd977;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  transition: all var(--motion);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fullscreen-order-btn:hover {
+  background: rgba(45, 33, 22, 0.96);
+  border-color: #ffd977;
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.fullscreen-order-btn .order-btn-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.fullscreen-order-btn .order-btn-text {
+  letter-spacing: 0.02em;
+}
+
+.fullscreen-order-btn .order-btn-badge {
+  background: linear-gradient(135deg, #c8951b 0%, #f1c968 100%);
+  color: #0c0906;
+  font-size: 11px;
+  font-weight: 800;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 99px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
 .fullscreen-close-btn {
   width: 44px;
   height: 44px;
+  min-width: 44px;
+  min-height: 44px;
   border-radius: 50%;
   background: rgba(26, 20, 14, 0.92);
   color: #ffd977;
@@ -374,6 +430,8 @@
   transition: all var(--motion);
   cursor: pointer;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  flex-shrink: 0;
+  margin-left: 2px;
 }
 
 .fullscreen-close-btn:hover {
@@ -725,29 +783,79 @@
 }
 
 /* Responsive adjustments for phones & tablets */
-@media(max-width: 768px) {
+@media(max-width: 860px) {
   .fullscreen-top-bar {
-    height: 60px;
-    padding: 0 14px;
+    height: auto;
+    min-height: 60px;
+    padding: calc(6px + env(safe-area-inset-top, 0px)) 14px 6px;
+    gap: 8px;
   }
-  .fullscreen-title-box {
+  .fullscreen-header-right {
+    gap: 8px;
+  }
+  .fullscreen-order-btn {
+    min-height: 38px;
+    padding: 0 10px;
+  }
+  .fullscreen-order-btn .order-btn-text {
     display: none;
   }
+}
+
+@media(max-width: 640px) {
+  .fullscreen-top-bar {
+    min-height: 54px;
+    padding: calc(6px + env(safe-area-inset-top, 0px)) 10px 6px;
+    gap: 6px;
+  }
   .fullscreen-status-pill {
-    padding: 5px 10px;
+    display: none;
+  }
+  .fullscreen-title-box {
+    display: flex;
+  }
+  .fullscreen-design-code {
+    font-size: 16px;
+  }
+  .fullscreen-category-sub {
+    display: none;
+  }
+  .fullscreen-header-right {
+    gap: 6px;
+  }
+  .fullscreen-close-btn {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    min-height: 38px;
+    font-size: 18px;
+  }
+  .fullscreen-order-btn {
+    min-height: 36px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+  .zoom-tool-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 16px;
+  }
+  .zoom-level-btn {
+    min-width: 34px;
+    padding: 0 4px;
     font-size: 11px;
   }
   .fullscreen-image-stage {
-    top: calc(64px + env(safe-area-inset-top));
-    bottom: calc(148px + env(safe-area-inset-bottom));
-    padding: 6px 12px;
+    top: calc(58px + env(safe-area-inset-top, 0px));
+    bottom: calc(148px + env(safe-area-inset-bottom, 0px));
+    padding: 6px 8px;
   }
   .fullscreen-jewelry-img {
     max-width: 100%;
     max-height: 100%;
   }
   .fullscreen-bottom-dock {
-    padding: 6px 10px calc(8px + env(safe-area-inset-bottom));
+    padding: 6px 10px calc(8px + env(safe-area-inset-bottom, 0px));
   }
   .fullscreen-bottom-bar {
     flex-wrap: wrap;
@@ -1693,7 +1801,7 @@ footer a {
   background: rgba(8, 6, 4, 0.75);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  z-index: 999;
+  z-index: 10000;
   animation: fadeIn 180ms ease;
   display: flex;
   justify-content: flex-end;
@@ -1709,7 +1817,7 @@ footer a {
   background: rgba(14, 11, 8, 0.98);
   border-left: 1.5px solid rgba(212, 160, 58, 0.35);
   box-shadow: -16px 0 48px rgba(0, 0, 0, 0.85);
-  z-index: 1000;
+  z-index: 10001;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1851,20 +1959,71 @@ footer a {
   color: #ffd977;
 }
 
-/* Ensure session actions in header leave breathing space for top-right button */
+/* Header Session Actions & Order Capsule */
 header .session-actions {
-  margin-right: 130px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.header-order-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 99px;
+  background: rgba(28, 20, 14, 0.95);
+  border: 1.5px solid rgba(212, 160, 58, 0.45);
+  color: #ffd977;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--motion);
+  white-space: nowrap;
+}
+
+.header-order-btn:hover {
+  background: rgba(45, 33, 22, 0.96);
+  border-color: #ffd977;
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.header-order-badge {
+  background: linear-gradient(135deg, #c8951b 0%, #f1c968 100%);
+  color: #0c0906;
+  font-size: 11px;
+  font-weight: 800;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 99px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 @media(max-width: 768px) {
   header .session-actions {
-    margin-right: 110px;
+    gap: 6px;
+  }
+  .header-order-btn {
+    min-height: 34px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+  .header-order-text {
+    display: none;
   }
   .order-floating-trigger {
-    top: 12px;
-    right: 12px;
-    min-height: 38px;
-    padding: 0 10px;
+    top: auto;
+    bottom: 20px;
+    right: 16px;
+    min-height: 40px;
+    padding: 0 12px;
     font-size: 12px;
   }
   .order-drawer-panel {

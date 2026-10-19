@@ -17,6 +17,8 @@ export interface FullscreenViewerProps {
   categories: Category[]
   subcategories: Subcategory[]
   grams: (mg: number) => string
+  orderCount?: number
+  onOpenOrderDrawer?: () => void
 }
 
 export function FullscreenViewer({
@@ -34,7 +36,9 @@ export function FullscreenViewer({
   onUpdateSelected,
   categories,
   subcategories,
-  grams
+  grams,
+  orderCount,
+  onOpenOrderDrawer
 }: FullscreenViewerProps) {
   // Zoom & Pan state
   const [zoom, setZoom] = useState<number>(1)
@@ -290,7 +294,7 @@ export function FullscreenViewer({
           <span>{isSelected ? '✓ Selected in Order' : '○ Tap Image to Select'}</span>
         </div>
 
-        {/* Right Action Icons: Zoom Controls & Close */}
+        {/* Right Action Icons: Zoom Controls, Order Drawer & Close */}
         <div className="fullscreen-header-right">
           <div className="fullscreen-zoom-toolbar">
             <button
@@ -322,6 +326,20 @@ export function FullscreenViewer({
               +
             </button>
           </div>
+
+          {onOpenOrderDrawer && (
+            <button
+              type="button"
+              className="fullscreen-order-btn"
+              onClick={onOpenOrderDrawer}
+              aria-label={`Manufacturer order: ${orderCount ?? 0} item(s)`}
+              title={`View manufacturer order (${orderCount ?? 0} designs)`}
+            >
+              <span className="order-btn-icon" aria-hidden="true">📋</span>
+              <span className="order-btn-text">Order</span>
+              <span className="order-btn-badge">{orderCount ?? 0}</span>
+            </button>
+          )}
 
           <button
             type="button"

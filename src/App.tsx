@@ -831,7 +831,7 @@ export function App(){
   {logoModalOpen && <LogoLightboxModal onClose={() => setLogoModalOpen(false)} />}
 
   {/* Top-Right Floating Manufacturer Order Icon */}
-  {view === 'catalogue' && (
+  {view === 'catalogue' && !detail && (
     <button
       type="button"
       className={`order-floating-trigger ${cart.length > 0 ? 'has-items' : ''} ${orderDrawerOpen ? 'drawer-open' : ''}`}
@@ -992,6 +992,19 @@ export function App(){
         </div>
       </div>
       <div className="session-actions">
+        {view === 'catalogue' && (
+          <button
+            type="button"
+            className={`header-order-btn ${cart.length > 0 ? 'has-items' : ''}`}
+            onClick={() => setOrderDrawerOpen(true)}
+            aria-label={`Manufacturer order: ${cart.length} design(s)`}
+            title={`View manufacturer order (${cart.length} designs)`}
+          >
+            <span aria-hidden="true">📋</span>
+            <span className="header-order-text">Order</span>
+            <span className="header-order-badge">{cart.length}</span>
+          </button>
+        )}
         <div className="connection" style={{color:online?((syncing||uploading)?'var(--gold)':'var(--green)'):'var(--muted)'}}>
           <i style={{background:online?((syncing||uploading)?'var(--gold)':'var(--green)'):'var(--muted)'}}/> {online?((syncing||uploading)?(syncing?'Syncing…':'Uploading…'):`Online · ${session.displayName}`):`Offline · ${session.displayName}`}
         </div>
@@ -1918,6 +1931,8 @@ export function App(){
       categories={categories}
       subcategories={subcategories}
       grams={grams}
+      orderCount={cart.length}
+      onOpenOrderDrawer={() => setOrderDrawerOpen(true)}
     />
   )}
    {pdfModal && (() => {
