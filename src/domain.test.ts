@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { columnsFor, rowHeightFor, rowOf, OVERSCAN_ROWS } from './VirtualGrid'
 import { computeSha256, productFromRecord } from './sync'
 
 describe('business invariant helpers',()=>{
@@ -208,35 +209,29 @@ describe('business invariant helpers',()=>{
     // Unique new name/address
     expect(validateVendorEdit('v2', 'Surat Diamond Craft', 'Varachha')).toBe(true)
    })
-   it('bounds progressive catalogue windowing to prevent DOM memory explosion', ()=>{
-    const INITIAL_BATCH = 40
-    const BATCH_INCREMENT = 24
-    const totalItems = Array.from({ length: 250 }, (_, i) => ({ id: `p-${i}`, code: `SJ-${1000 + i}` }))
-
-    let visibleCount = INITIAL_BATCH
-    const sliceItems = (count: number) => totalItems.slice(0, count)
-
-    // Initial render only slices first 40 items out of 250 into the DOM
-    expect(sliceItems(visibleCount)).toHaveLength(40)
-    expect(sliceItems(visibleCount)[0].code).toBe('SJ-1000')
-    expect(sliceItems(visibleCount)[39].code).toBe('SJ-1039')
-
-    // First scroll trigger increments by 24
-    visibleCount = Math.min(totalItems.length, visibleCount + BATCH_INCREMENT)
-    expect(sliceItems(visibleCount)).toHaveLength(64)
-
-    // Multiple scroll triggers increment up to exact total count without overflowing
-    while (visibleCount < totalItems.length) {
-      visibleCount = Math.min(totalItems.length, visibleCount + BATCH_INCREMENT)
-    }
-    expect(visibleCount).toBe(250)
-    expect(sliceItems(visibleCount)).toHaveLength(250)
-
-    // Filter change immediately resets window back to INITIAL_BATCH
-    const onFilterChange = () => { visibleCount = INITIAL_BATCH }
-    onFilterChange()
-    expect(visibleCount).toBe(40)
-    expect(sliceItems(visibleCount)).toHaveLength(40)
+   it('virtual grid computes the same column count as CSS auto-fill minmax(150px,1fr) and bounds rendered rows', ()=>{
+    // iPad Air landscape catalogue column (1180 viewport - 340 tray - gaps/padding ≈ 760px) → 4 columns, like the CSS grid.
+    expect(columnsFor(760, 1180)).toEqual({ columns: 4, gap: 12 })
+    // 1296px wide grid → 8 columns; exactly at a boundary (150*5 + 12*4 = 798) → 5 columns.
+    expect(columnsFor(1296, 1480).columns).toBe(8)
+    expect(columnsFor(798, 1480).columns).toBe(5)
+    expect(columnsFor(797, 1480).columns).toBe(4)
+    // Phones ≤480px always use the fixed 2-column layout with the smaller gap.
+    expect(columnsFor(320, 390)).toEqual({ columns: 2, gap: 8 })
+    // Hidden tab (display:none → width 0) renders nothing instead of dividing by zero.
+    expect(columnsFor(0, 1180).columns).toBe(0)
+    expect(rowHeightFor(0, 0, 12)).toBe(0)
+    // Row height = image (aspect 1.27) + meta strip + gap; a 10,000-product catalogue is 2,500 rows of which only
+    // the visible rows + OVERSCAN_ROWS on each side exist in the DOM.
+    const { columns, gap } = columnsFor(760, 1180)
+    const h = rowHeightFor(760, columns, gap)
+    expect(h).toBeGreaterThan(150); expect(h).toBeLessThan(260)
+    const rows = Math.ceil(10000 / columns)
+    expect(rows).toBe(2500)
+    const visibleRows = Math.ceil(820 / h)
+    expect(visibleRows + 2 * OVERSCAN_ROWS).toBeLessThanOrEqual(14)
+    // Index → row mapping used to scroll the viewer's current design into the rendered window.
+    expect(rowOf(0, columns)).toBe(0); expect(rowOf(3, columns)).toBe(0); expect(rowOf(4, columns)).toBe(1); expect(rowOf(9999, columns)).toBe(2499)
    })
    it('preserves full dataset traversal for detail modal navigation despite DOM windowing', ()=>{
     const fullDataset = Array.from({ length: 150 }, (_, i) => ({ id: `prod-${i}`, designCode: `SJ-${i}` }))

@@ -35,11 +35,10 @@ import { BatchEntry, ProductEntry, Taxonomy } from './Management'
 import { EditProductModal, DeleteConfirmModal } from './ProductModals'
 import { EditVendorModal, DeleteVendorModal } from './VendorModals'
 import { FullscreenViewer } from './FullscreenViewer'
+import { VirtualGrid } from './VirtualGrid'
 
 const grams=(mg:number)=>(mg/1000).toFixed(3)
 const uid=()=>crypto.randomUUID()
-const INITIAL_BATCH_SIZE = 40
-const BATCH_INCREMENT = 24
 type View='catalogue'|'history'|'vendors'|'products'|'batch'|'taxonomy'|'storage'|'devices'
 const sessionKey='shine-jewels.session'
 const deviceKey='shine-jewels.device-id'
@@ -231,8 +230,6 @@ export function App(){
  const [resetPasswordStaff,setResetPasswordStaff]=useState<StaffUser|null>(null)
  const [newResetPasswordValue,setNewResetPasswordValue]=useState('')
  const [showResetPasswordInput,setShowResetPasswordInput]=useState(false)
- const [visibleCount,setVisibleCount]=useState<number>(INITIAL_BATCH_SIZE)
- const sentinelRef=useRef<HTMLDivElement|null>(null)
  const [resolvedDetailUrl,setResolvedDetailUrl]=useState<string>('')
  const maxPossibleWeight = useMemo(()=>{const active=products.filter(p=>!p.deleted).map(p=>p.weightMg/1000);return active.length?Math.max(50,Math.ceil(Math.max(...active))):100},[products])
  const currentMinVal = minWeight !== '' ? Math.max(0, Math.round(Number(minWeight))) : 0
@@ -249,30 +246,8 @@ export function App(){
   setMaxWeight(v >= maxPossibleWeight ? '' : String(v))
  }
  const filtered=useMemo(()=>{const minMg=minWeight!==''?Math.round(Number(minWeight)*1000):0,maxMg=maxWeight!==''?Math.round(Number(maxWeight)*1000):Infinity;return products.filter(p=>!p.deleted&&p.designCode.toLowerCase().includes(query.trim().toLowerCase())&&(!category||p.categoryId===category)&&(!subcategory||p.subcategoryId===subcategory)&&p.weightMg>=minMg&&p.weightMg<=maxMg)},[products,query,category,subcategory,minWeight,maxWeight])
- useEffect(()=>{
-  setVisibleCount(INITIAL_BATCH_SIZE)
- },[query,category,subcategory,minWeight,maxWeight])
- const visibleProducts=useMemo(()=>filtered.slice(0,visibleCount),[filtered,visibleCount])
- useEffect(()=>{
-  const sentinel=sentinelRef.current
-  if(!sentinel)return
-  const observer=new IntersectionObserver((entries)=>{
-   const first=entries[0]
-   if(first&&first.isIntersecting){
-    setVisibleCount(prev=>(prev<filtered.length?Math.min(filtered.length,prev+BATCH_INCREMENT):prev))
-   }
-  },{rootMargin:'600px 0px'})
-  observer.observe(sentinel)
-  return()=>observer.disconnect()
- },[filtered.length])
- useEffect(()=>{
-  if(detail){
-   const idx=filtered.findIndex(p=>p.id===detail.id)
-   if(idx>=visibleCount){
-    setVisibleCount(Math.min(filtered.length,idx+BATCH_INCREMENT))
-   }
-  }
- },[detail,filtered,visibleCount])
+ // Changing any filter scrolls back to the top of the grid.
+ const filterKey=`${query}|${category}|${subcategory}|${minWeight}|${maxWeight}`
  useEffect(()=>{
   if(!detail){
    setResolvedDetailUrl('')
@@ -1033,7 +1008,7 @@ export function App(){
       </div>
     </div>
   )}
-  <div className="grid">{visibleProducts.map(product=><article className={'product '+((selected[product.id]||demoSelected[product.id])?'chosen':'')} key={product.id}>{demoMode&&(<button type="button" className={`product-demo-badge ${demoSelected[product.id]?'selected':''}`} onClick={(e)=>{e.stopPropagation();toggleDemoItem(product.id)}} title={demoSelected[product.id]?'Remove from Sales Demo':'Include in Sales Demo'}>{demoSelected[product.id]?'✓ In Demo':'+ Add to Demo'}</button>)}<button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><img src={product.gridImage} alt={`${product.designCode} jewelry design`} loading="lazy" decoding="async" /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div>{demoMode?(<button className={`select ${demoSelected[product.id]?'active-demo':''}`} aria-pressed={Boolean(demoSelected[product.id])} onClick={()=>toggleDemoItem(product.id)}>{demoSelected[product.id]?'✓ In Demo':'Select for Demo'}</button>):(<button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button>)}</div></article>)}</div>{visibleCount<filtered.length&&<div ref={sentinelRef} style={{height:'1px',width:'100%',pointerEvents:'none',margin:0,padding:0}} aria-hidden="true"/>}</section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label>{vendorId&&(
+  <VirtualGrid products={filtered} scrollToId={detail?.id} resetKey={filterKey} renderCard={product=><article className={'product '+((selected[product.id]||demoSelected[product.id])?'chosen':'')} key={product.id}>{demoMode&&(<button type="button" className={`product-demo-badge ${demoSelected[product.id]?'selected':''}`} onClick={(e)=>{e.stopPropagation();toggleDemoItem(product.id)}} title={demoSelected[product.id]?'Remove from Sales Demo':'Include in Sales Demo'}>{demoSelected[product.id]?'✓ In Demo':'+ Add to Demo'}</button>)}<button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><img src={product.gridImage} alt={`${product.designCode} jewelry design`} decoding="async" /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div>{demoMode?(<button className={`select ${demoSelected[product.id]?'active-demo':''}`} aria-pressed={Boolean(demoSelected[product.id])} onClick={()=>toggleDemoItem(product.id)}>{demoSelected[product.id]?'✓ In Demo':'Select for Demo'}</button>):(<button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button>)}</div></article>} /></section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label>{vendorId&&(
 <div className="order-reps-section">
  <div className="order-reps-header">
   <span className="order-reps-title">Vendor Representative <span className="order-reps-subtitle">(Optional)</span></span>

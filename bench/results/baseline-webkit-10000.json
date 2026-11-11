@@ -1,0 +1,82 @@
+{
+  "summary": {
+    "label": "baseline",
+    "engine": "webkit",
+    "cpuThrottle": 1,
+    "count": 10000,
+    "cloudFraction": 0,
+    "runs": 1,
+    "at": "2026-11-10T21:06:22.122Z",
+    "msCatalogueReady": 4726,
+    "msFirstImages": 4779,
+    "msSyncDone": 19169,
+    "appRssMb": 1577,
+    "rssSettledMb": 1918,
+    "peakRssMb": 3900,
+    "r2DuringLoad": 0,
+    "r2Total": 0,
+    "fling": {
+      "msToReachLastProduct": null,
+      "reachedLast": false,
+      "frames": 2971,
+      "frameP50": 17,
+      "frameP95": 36,
+      "jankyPct": 0,
+      "framesWithBlankTiles": 7,
+      "maxBlankTiles": 20,
+      "minCoverage": 0.8571428571428571,
+      "domCardsAtEnd": 3520
+    },
+    "jump": {
+      "msUntilScreenFilled": 401,
+      "framesWithBlankTiles": 0,
+      "maxBlankTiles": 0,
+      "domCards": 3544
+    }
+  },
+  "results": [
+    {
+      "index": 0,
+      "seeded": {
+        "cloudProducts": 0,
+        "gridBytesAvg": 104065,
+        "seedMs": 10868
+      },
+      "msCatalogueReady": 4726,
+      "msFirstImages": 4779,
+      "msSyncDone": 19169,
+      "rssBeforeAppMb": 341,
+      "appRssMb": 1577,
+      "rssSettledMb": 1918,
+      "peakRssMb": 3900,
+      "r2DuringLoad": 0,
+      "r2Total": 0,
+      "fling": {
+        "frames": 2971,
+        "frameP50": 17,
+        "frameP95": 36,
+        "frameMax": 58,
+        "jankyPct": 0,
+        "framesWithBlankTiles": 7,
+        "maxBlankTiles": 20,
+        "minCoverage": 0.8571428571428571,
+        "msToFinish": null,
+        "atLastProduct": false,
+        "domCards": 3520
+      },
+      "jump": {
+        "frames": 1,
+        "frameP50": 84,
+        "frameP95": 84,
+        "frameMax": 84,
+        "jankyPct": 100,
+        "framesWithBlankTiles": 0,
+        "maxBlankTiles": 0,
+        "minCoverage": 0.9226190476190477,
+        "msToFinish": 401,
+        "atLastProduct": false,
+        "domCards": 3544
+      }
+    }
+  ]
+}

@@ -1,0 +1,168 @@
+{
+  "summary": {
+    "label": "baseline",
+    "engine": "webkit",
+    "cpuThrottle": 1,
+    "count": 1296,
+    "cloudFraction": 0,
+    "runs": 3,
+    "at": "2026-11-10T21:03:31.875Z",
+    "msCatalogueReady": 764,
+    "msFirstImages": 792,
+    "msSyncDone": 2142,
+    "appRssMb": 938,
+    "rssSettledMb": 1280,
+    "peakRssMb": 1377,
+    "r2DuringLoad": 0,
+    "r2Total": 0,
+    "fling": {
+      "msToReachLastProduct": 22146,
+      "reachedLast": true,
+      "frames": 1303,
+      "frameP50": 17,
+      "frameP95": 21,
+      "jankyPct": 0,
+      "framesWithBlankTiles": 5,
+      "maxBlankTiles": 20,
+      "minCoverage": 0.8571428571428571,
+      "domCardsAtEnd": 1296
+    },
+    "jump": {
+      "msUntilScreenFilled": 359,
+      "framesWithBlankTiles": 0,
+      "maxBlankTiles": 0,
+      "domCards": 1296
+    }
+  },
+  "results": [
+    {
+      "index": 0,
+      "seeded": {
+        "cloudProducts": 0,
+        "gridBytesAvg": 104065,
+        "seedMs": 1905
+      },
+      "msCatalogueReady": 771,
+      "msFirstImages": 796,
+      "msSyncDone": 2150,
+      "rssBeforeAppMb": 341,
+      "appRssMb": 938,
+      "rssSettledMb": 1280,
+      "peakRssMb": 1377,
+      "r2DuringLoad": 0,
+      "r2Total": 0,
+      "fling": {
+        "frames": 1303,
+        "frameP50": 17,
+        "frameP95": 21,
+        "frameMax": 62,
+        "jankyPct": 0,
+        "framesWithBlankTiles": 4,
+        "maxBlankTiles": 20,
+        "minCoverage": 0.8571428571428571,
+        "msToFinish": 22146,
+        "atLastProduct": true,
+        "domCards": 1296
+      },
+      "jump": {
+        "frames": 1,
+        "frameP50": 54,
+        "frameP95": 54,
+        "frameMax": 54,
+        "jankyPct": 100,
+        "framesWithBlankTiles": 0,
+        "maxBlankTiles": 0,
+        "minCoverage": 0.8333333333333334,
+        "msToFinish": 358,
+        "atLastProduct": true,
+        "domCards": 1296
+      }
+    },
+    {
+      "index": 1,
+      "seeded": {
+        "cloudProducts": 0,
+        "gridBytesAvg": 104065,
+        "seedMs": 1792
+      },
+      "msCatalogueReady": 716,
+      "msFirstImages": 737,
+      "msSyncDone": 2089,
+      "rssBeforeAppMb": 341,
+      "appRssMb": 1072,
+      "rssSettledMb": 1413,
+      "peakRssMb": 1470,
+      "r2DuringLoad": 0,
+      "r2Total": 0,
+      "fling": {
+        "frames": 1303,
+        "frameP50": 17,
+        "frameP95": 21,
+        "frameMax": 55,
+        "jankyPct": 0,
+        "framesWithBlankTiles": 5,
+        "maxBlankTiles": 20,
+        "minCoverage": 0.8571428571428571,
+        "msToFinish": 22141,
+        "atLastProduct": true,
+        "domCards": 1296
+      },
+      "jump": {
+        "frames": 1,
+        "frameP50": 65,
+        "frameP95": 65,
+        "frameMax": 65,
+        "jankyPct": 100,
+        "framesWithBlankTiles": 0,
+        "maxBlankTiles": 0,
+        "minCoverage": 0.8333333333333334,
+        "msToFinish": 367,
+        "atLastProduct": true,
+        "domCards": 1296
+      }
+    },
+    {
+      "index": 2,
+      "seeded": {
+        "cloudProducts": 0,
+        "gridBytesAvg": 104065,
+        "seedMs": 1783
+      },
+      "msCatalogueReady": 764,
+      "msFirstImages": 792,
+      "msSyncDone": 2142,
+      "rssBeforeAppMb": 341,
+      "appRssMb": 925,
+      "rssSettledMb": 1266,
+      "peakRssMb": 1338,
+      "r2DuringLoad": 0,
+      "r2Total": 0,
+      "fling": {
+        "frames": 1305,
+        "frameP50": 17,
+        "frameP95": 21,
+        "frameMax": 62,
+        "jankyPct": 0,
+        "framesWithBlankTiles": 5,
+        "maxBlankTiles": 20,
+        "minCoverage": 0.8571428571428571,
+        "msToFinish": 22146,
+        "atLastProduct": true,
+        "domCards": 1296
+      },
+      "jump": {
+        "frames": 1,
+        "frameP50": 56,
+        "frameP95": 56,
+        "frameMax": 56,
+        "jankyPct": 100,
+        "framesWithBlankTiles": 0,
+        "maxBlankTiles": 0,
+        "minCoverage": 0.8333333333333334,
+        "msToFinish": 359,
+        "atLastProduct": true,
+        "domCards": 1296
+      }
+    }
+  ]
+}

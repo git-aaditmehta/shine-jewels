@@ -1,0 +1,128 @@
+{
+  "summary": {
+    "label": "phase2-virtual",
+    "engine": "webkit",
+    "cpuThrottle": 1,
+    "count": 1296,
+    "cloudFraction": 0,
+    "runs": 2,
+    "at": "2026-11-11T04:10:53.323Z",
+    "msCatalogueReady": 697,
+    "msFirstImages": 702,
+    "msSyncDone": 2023,
+    "appRssMb": 1147,
+    "rssSettledMb": 1488,
+    "peakRssMb": 1718,
+    "r2DuringLoad": 0,
+    "r2Total": 0,
+    "fling": {
+      "msToReachLastProduct": 22142,
+      "reachedLast": true,
+      "frames": 1308,
+      "frameP50": 17,
+      "frameP95": 17,
+      "jankyPct": 0,
+      "framesWithBlankTiles": 0,
+      "maxBlankTiles": 0,
+      "minCoverage": 0.7857142857142857,
+      "domCardsAtEnd": 36
+    },
+    "render": null,
+    "jump": {
+      "msUntilScreenFilled": 313,
+      "framesWithBlankTiles": 0,
+      "maxBlankTiles": 0,
+      "domCards": 32
+    }
+  },
+  "results": [
+    {
+      "index": 0,
+      "seeded": {
+        "cloudProducts": 0,
+        "gridBytesAvg": 104065,
+        "seedMs": 1958
+      },
+      "msCatalogueReady": 791,
+      "msFirstImages": 795,
+      "msSyncDone": 2203,
+      "rssBeforeAppMb": 341,
+      "appRssMb": 1354,
+      "rssSettledMb": 1695,
+      "peakRssMb": 1850,
+      "r2DuringLoad": 0,
+      "r2Total": 0,
+      "fling": {
+        "frames": 1308,
+        "frameP50": 17,
+        "frameP95": 17,
+        "frameMax": 44,
+        "jankyPct": 0,
+        "framesWithBlankTiles": 0,
+        "maxBlankTiles": 0,
+        "minCoverage": 0.7857142857142857,
+        "msToFinish": 22142,
+        "atLastProduct": true,
+        "domCards": 36
+      },
+      "jump": {
+        "frames": 1,
+        "frameP50": 23,
+        "frameP95": 23,
+        "frameMax": 23,
+        "jankyPct": 0,
+        "framesWithBlankTiles": 0,
+        "maxBlankTiles": 0,
+        "minCoverage": 1,
+        "msToFinish": 327,
+        "atLastProduct": true,
+        "domCards": 32
+      },
+      "render": null
+    },
+    {
+      "index": 1,
+      "seeded": {
+        "cloudProducts": 0,
+        "gridBytesAvg": 104065,
+        "seedMs": 1964
+      },
+      "msCatalogueReady": 697,
+      "msFirstImages": 702,
+      "msSyncDone": 2023,
+      "rssBeforeAppMb": 341,
+      "appRssMb": 1147,
+      "rssSettledMb": 1488,
+      "peakRssMb": 1718,
+      "r2DuringLoad": 0,
+      "r2Total": 0,
+      "fling": {
+        "frames": 1308,
+        "frameP50": 17,
+        "frameP95": 17,
+        "frameMax": 45,
+        "jankyPct": 0,
+        "framesWithBlankTiles": 0,
+        "maxBlankTiles": 0,
+        "minCoverage": 0.7857142857142857,
+        "msToFinish": 22145,
+        "atLastProduct": true,
+        "domCards": 36
+      },
+      "jump": {
+        "frames": 1,
+        "frameP50": 12,
+        "frameP95": 12,
+        "frameMax": 12,
+        "jankyPct": 0,
+        "framesWithBlankTiles": 0,
+        "maxBlankTiles": 0,
+        "minCoverage": 1,
+        "msToFinish": 313,
+        "atLastProduct": true,
+        "domCards": 32
+      },
+      "render": null
+    }
+  ]
+}
