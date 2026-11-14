@@ -9,13 +9,15 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { startMockCloud } from './mock-cloud.mjs'
 
 const run = promisify(execFile)
 const arg = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i > -1 ? (process.argv[i + 1]?.startsWith('--') || process.argv[i + 1] === undefined ? true : process.argv[i + 1]) : fallback }
 const COUNT = Number(arg('count', 1296)), RUNS = Number(arg('runs', 3)), LABEL = String(arg('label', 'run')), ENGINE = String(arg('engine', 'webkit'))
 const CPU = Number(arg('cpu', 1)), CLOUD = Number(arg('cloud', 0)), HEADED = Boolean(arg('headed', false)), PORT = 4319
 const ORIGIN = `http://localhost:${PORT}`
-const R2_LATENCY_MS = 400, R2_PARALLEL = 6 // measured r2.dev from Mumbai/Jio: ~416ms warm, HTTP/1.1 (=6 connections/host)
+const DETAIL_SIDE = Number(arg('detail', 2000)) // long side of the synthetic high-res photos
+const R2_LATENCY_MS = 400 // measured r2.dev from Mumbai/Jio: ~416ms warm, HTTP/1.1 (=6 connections/host)
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 const median = a => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor((s.length - 1) / 2)] : NaN }
@@ -81,33 +83,19 @@ async function scrollTest(page, mode) {
   }, { mode, count: COUNT })
 }
 
-async function oneRun(index, sampleJpeg) {
+async function oneRun(index) {
   const dir = await mkdtemp(join(tmpdir(), 'shine-bench-'))
   const engine = ENGINE === 'chromium' ? chromium : webkit
   const context = await engine.launchPersistentContext(dir, { headless: !HEADED, viewport: { width: 1180, height: 820 }, deviceScaleFactor: 2, hasTouch: true, serviceWorkers: 'block' })
-  let r2Requests = 0, inflight = 0; const r2Queue = []
-  await context.route(/\.workers\.dev\//, async route => {
-    const path = new URL(route.request().url()).pathname, h = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization,content-type', 'content-type': 'application/json' }
-    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: h })
-    const body = path.startsWith('/sync/bootstrap') ? { categories: [], subcategories: [], vendors: [], products: [], presentations: [], checkpoint: 1 }
-      : (path.startsWith('/sync/changes') || ['/history', '/devices', '/staff'].includes(path)) ? [] : { ok: true }
-    return route.fulfill({ status: 200, headers: h, body: JSON.stringify(body) })
-  })
-  // r2.dev simulated as measured: ~400ms per image, max 6 at a time (HTTP/1.1).
-  await context.route(/r2\.dev\//, async route => {
-    r2Requests++
-    if (inflight >= R2_PARALLEL) await new Promise(r => r2Queue.push(r))
-    inflight++; await sleep(R2_LATENCY_MS)
-    try { await route.fulfill({ status: 200, headers: { 'content-type': 'image/jpeg', 'access-control-allow-origin': '*' }, body: sampleJpeg }) } catch { /* page gone */ }
-    inflight--; r2Queue.shift()?.()
-  })
-
+  // Cloud traffic goes to the local mock (bench/mock-cloud.mjs): ~400ms per image like r2.dev measured from Mumbai.
+  cloud.r2Gets = 0
   const stage = t => process.stderr.write(`  [run ${index + 1}] ${t}\n`)
   stage('seeding')
   const seedPage = await context.newPage()
   await seedPage.goto(`${ORIGIN}/bench/seed.html`)
   await seedPage.waitForFunction(() => typeof window.seed === 'function')
-  const seeded = await seedPage.evaluate(o => window.seed(o), { count: COUNT, cloudFraction: CLOUD })
+  const seeded = await seedPage.evaluate(o => window.seed(o), { count: COUNT, cloudFraction: CLOUD, detailSide: DETAIL_SIDE })
+  cloud.setVariants(seeded)
   await seedPage.close(); await sleep(800)
   const rssBeforeApp = await browserRssMb()
 
@@ -121,18 +109,29 @@ async function oneRun(index, sampleJpeg) {
 
   const page = await context.newPage()
   if (ENGINE === 'chromium' && CPU > 1) { const cdp = await context.newCDPSession(page); await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU }) }
-  const r2BeforeLoad = r2Requests
+  const r2BeforeLoad = cloud.r2Gets
   stage('loading app')
   await page.goto(ORIGIN, { waitUntil: 'commit' })
-  const msCatalogueReady = await page.waitForFunction(n => document.body.innerText.includes(`${n} designs`) && performance.now(), COUNT, { timeout: 120000 }).then(h => h.jsonValue()).catch(async e => { console.error('PAGE TEXT:', (await page.evaluate(() => document.body.innerText)).slice(0, 300)); throw e })
+  let msCatalogueReady = await page.waitForFunction(n => document.body.innerText.includes(`${n} designs`) && performance.now(), COUNT, { timeout: 120000 }).then(h => h.jsonValue()).catch(async e => { console.error('PAGE TEXT:', (await page.evaluate(() => document.body.innerText)).slice(0, 300)); throw e })
   stage('catalogue ready')
+  // First start after the update: the old text-format photos are converted to image files. Time it, then restart the
+  // app so everything below measures the normal, every-day state.
+  const photosDone = () => page.waitForFunction(() => { const p = window.__sjImages?.progress(); return p && p.state === 'complete' && p.thumbs.total > 0 && p.thumbs.ready === p.thumbs.total && p.details.ready === p.details.total && performance.now() }, null, { timeout: 900000, polling: 250 }).then(h => h.jsonValue()).catch(() => null)
+  const msThumbsConverted = await page.waitForFunction(() => { const p = window.__sjImages?.progress(); return p && p.thumbs.total > 0 && p.thumbs.ready === p.thumbs.total && performance.now() }, null, { timeout: 900000, polling: 250 }).then(h => h.jsonValue()).catch(() => null)
+  const msMigrationFirstImages = await page.evaluate(() => { const p = window.__probe(); return p.visible > 0 && p.incomplete === 0 ? performance.now() : null })
+  stage('thumbnails converted')
+  const msAllPhotosConverted = await photosDone()
+  stage('all photos converted; restarting app')
+  const rssAfterMigration = await browserRssMb()
+  await page.reload({ waitUntil: 'commit' })
+  msCatalogueReady = await page.waitForFunction(n => document.body.innerText.includes(`${n} designs`) && performance.now(), COUNT, { timeout: 120000 }).then(h => h.jsonValue())
   const msFirstImages = await page.waitForFunction(() => { const p = window.__probe(); return p.visible > 0 && p.incomplete === 0 && performance.now() }, null, { timeout: 120000, polling: 'raf' }).then(h => h.jsonValue()).catch(() => null)
   stage('first images shown')
   const msSyncDone = await page.waitForFunction(() => /Sync complete|Sync failed/.test(document.body.innerText) && performance.now(), null, { timeout: 60000 }).then(h => h.jsonValue()).catch(() => null)
   stage('sync done; scrolling')
   await sleep(1000)
   const rssSettled = await browserRssMb()
-  const r2DuringLoad = r2Requests - r2BeforeLoad
+  const r2DuringLoad = cloud.r2Gets - r2BeforeLoad
   // Chromium only: trace the rendering pipeline during the fling. CPU throttling does not slow painting/raster,
   // so frame times alone cannot show CSS (blur/shadow) cost — summed paint+raster+composite time can.
   let render = null
@@ -152,31 +151,23 @@ async function oneRun(index, sampleJpeg) {
   }
   const jump = await scrollTest(page, 'jump')
   sampling = false; await sampler
-  const r2Total = r2Requests - r2BeforeLoad
+  const r2Total = cloud.r2Gets - r2BeforeLoad
+  const diskMb = await page.evaluate(async () => { const e = await navigator.storage.estimate(); return Math.round((e.usage || 0) / 1048576) }).catch(() => null)
   await context.close(); await rm(dir, { recursive: true, force: true })
-  return { index, seeded: { cloudProducts: seeded.cloudProducts, gridBytesAvg: seeded.gridBytesAvg, seedMs: seeded.seedMs }, msCatalogueReady: Math.round(msCatalogueReady), msFirstImages: msFirstImages && Math.round(msFirstImages),
-    msSyncDone: msSyncDone && Math.round(msSyncDone), rssBeforeAppMb: Math.round(rssBeforeApp), appRssMb: Math.round(rssSettled - rssBeforeApp), rssSettledMb: Math.round(rssSettled), peakRssMb: Math.round(peakRss), r2DuringLoad, r2Total, fling, jump, render }
-}
-
-async function sampleJpegOnce() {
-  // Grab one realistic JPEG for the r2.dev mock from a throwaway seed.
-  const dir = await mkdtemp(join(tmpdir(), 'shine-bench-jpeg-'))
-  const ctx = await webkit.launchPersistentContext(dir, { headless: true })
-  const p = await ctx.newPage(); await p.goto(`${ORIGIN}/bench/seed.html`); await p.waitForFunction(() => typeof window.seed === 'function')
-  const r = await p.evaluate(() => window.seed({ count: 1, cloudFraction: 0, variants: 2 }))
-  await ctx.close(); await rm(dir, { recursive: true, force: true })
-  return Buffer.from(r.sampleJpegBase64, 'base64')
+  return { index, seeded: { cloudProducts: seeded.cloudProducts, gridBytesAvg: seeded.gridBytesAvg, detailBytesAvg: seeded.detailBytesAvg, seedMs: seeded.seedMs }, msCatalogueReady: Math.round(msCatalogueReady), msFirstImages: msFirstImages && Math.round(msFirstImages),
+    msSyncDone: msSyncDone && Math.round(msSyncDone), msThumbsConverted: msThumbsConverted && Math.round(msThumbsConverted), msAllPhotosConverted: msAllPhotosConverted && Math.round(msAllPhotosConverted), msMigrationFirstImages: msMigrationFirstImages && Math.round(msMigrationFirstImages), rssAfterMigrationMb: Math.round(rssAfterMigration - rssBeforeApp), diskMb, rssBeforeAppMb: Math.round(rssBeforeApp), appRssMb: Math.round(rssSettled - rssBeforeApp), rssSettledMb: Math.round(rssSettled), peakRssMb: Math.round(peakRss), r2DuringLoad, r2Total, fling, jump, render }
 }
 
 const preview = await startPreview()
+const cloud = await startMockCloud({ latencyMs: R2_LATENCY_MS })
 try {
-  const jpeg = await sampleJpegOnce()
   const results = []
-  for (let i = 0; i < RUNS; i++) { const r = await oneRun(i, jpeg); results.push(r); console.log(`run ${i + 1}/${RUNS}`, JSON.stringify(r)) }
+  for (let i = 0; i < RUNS; i++) { const r = await oneRun(i); results.push(r); console.log(`run ${i + 1}/${RUNS}`, JSON.stringify(r)) }
   const m = f => median(results.map(f).filter(v => v !== null && v !== undefined))
   const summary = {
     label: LABEL, engine: ENGINE, cpuThrottle: CPU, count: COUNT, cloudFraction: CLOUD, runs: RUNS, at: new Date().toISOString(),
     msCatalogueReady: m(r => r.msCatalogueReady), msFirstImages: m(r => r.msFirstImages), msSyncDone: m(r => r.msSyncDone),
+    msThumbsConverted: m(r => r.msThumbsConverted), msAllPhotosConverted: m(r => r.msAllPhotosConverted), rssAfterMigrationMb: m(r => r.rssAfterMigrationMb), diskMb: m(r => r.diskMb), seededDetailKb: Math.round(results[0].seeded.detailBytesAvg / 1024),
     appRssMb: m(r => r.appRssMb), rssSettledMb: m(r => r.rssSettledMb), peakRssMb: m(r => r.peakRssMb), r2DuringLoad: m(r => r.r2DuringLoad), r2Total: m(r => r.r2Total),
     fling: { msToReachLastProduct: m(r => r.fling.msToFinish), reachedLast: results.every(r => r.fling.atLastProduct), frames: m(r => r.fling.frames), frameP50: m(r => r.fling.frameP50), frameP95: m(r => r.fling.frameP95), jankyPct: m(r => r.fling.jankyPct),
       framesWithBlankTiles: m(r => r.fling.framesWithBlankTiles), maxBlankTiles: m(r => r.fling.maxBlankTiles), minCoverage: m(r => r.fling.minCoverage), domCardsAtEnd: m(r => r.fling.domCards) },
@@ -186,4 +177,4 @@ try {
   console.log('\nSUMMARY', JSON.stringify(summary, null, 2))
   await mkdir('bench/results', { recursive: true })
   await writeFile(`bench/results/${LABEL}-${ENGINE}${CPU > 1 ? `-cpu${CPU}` : ''}-${COUNT}${CLOUD ? `-cloud${CLOUD}` : ''}.json`, JSON.stringify({ summary, results }, null, 2))
-} finally { preview.kill() }
+} finally { preview.kill(); await cloud.close() }

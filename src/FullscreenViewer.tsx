@@ -373,15 +373,10 @@ export function FullscreenViewer({
         >
           <img
             key={detail.id}
-            src={resolvedDetailUrl || detail.gridImage}
+            src={resolvedDetailUrl || undefined}
             alt={`${detail.designCode} jewelry design`}
             className="fullscreen-jewelry-img"
             draggable={false}
-            onError={(e) => {
-              if (detail.gridImage && e.currentTarget.src !== detail.gridImage) {
-                e.currentTarget.src = detail.gridImage
-              }
-            }}
           />
 
           {/* Quick gold selection ripple feedback */}

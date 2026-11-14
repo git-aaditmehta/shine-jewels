@@ -1,4 +1,5 @@
 import { LocalSqlite } from './local-sqlite'
+import { dataUrlToBytes, imageStore, sha256Hex } from './image-store'
 import type { Category, Order, Product, Session, Subcategory, Vendor } from './types'
 export type PendingOperation={id:string;idempotency_key:string;entity_type:string;operation:string;payload:string;retry_count:number}
 export interface CatalogueStorage {
@@ -10,10 +11,8 @@ export interface CatalogueStorage {
   updateProduct(x: Product): Promise<void>
   hasLocalReplica(): Promise<boolean>
   saveProduct(x: Product, queue?: boolean): Promise<void>
-  getImage(path: string): Promise<string | null>
-  saveImageData(path: string, dataUrl: string): Promise<void>
-  hasImage(path: string): Promise<boolean>
-  deleteImage(path: string): Promise<void>
+  /** Runs many writes as one database transaction (bulk catalogue downloads). */
+  bulk<T>(work: () => Promise<T>): Promise<T>
   categories(): Promise<Category[]>
   archivedCategories(): Promise<Category[]>
   canDeleteCategory(id: string): Promise<{ allowed: boolean; productCount: number }>
@@ -40,6 +39,8 @@ export interface CatalogueStorage {
   updateVendor(x: Vendor): Promise<void>
   saveVendor(x: Vendor): Promise<void>
   orders(): Promise<Order[]>
+  /** Orders created on this device whose upload has not finished yet. They are never deleted, merged or hidden. */
+  pendingOrderIds(): Promise<Set<string>>
   saveOrder(x: Order): Promise<void>
   session(): Promise<Session | null>
   saveSession(x: Session): Promise<void>
@@ -48,6 +49,17 @@ export interface CatalogueStorage {
   syncCheckpoint(): Promise<number>
   setSyncCheckpoint(x: number): Promise<void>
   pendingOperations(): Promise<PendingOperation[]>
+  /** Designs kept on this device because a different cloud design already uses their code. Never uploaded or deleted automatically. */
+  heldBackProducts(): Promise<Product[]>
+  /** One design on this device by id (active designs only), even when the catalogue hides it behind a same-code design. */
+  productRecord(id: string): Promise<Product | null>
+  holdBackProduct(id: string, cloudId: string): Promise<void>
+  /** How many designs were found at start-up that had never reached the cloud and were put back in the upload queue. */
+  requeuedAtStartup(): Promise<number>
+  /** Everything still waiting in the upload queue (not capped like pendingOperations). */
+  pendingOperationCount(): Promise<number>
+  /** Designs on this device whose photos or details have not reached the cloud yet. Wiping the device would lose them. */
+  unsentDesignCount(): Promise<number>
   completeOperation(id: string, error?: string): Promise<void>
   clearPendingOperations(): Promise<void>
   remapCategoryId(from: string, to: string): Promise<void>
@@ -56,144 +68,178 @@ export interface CatalogueStorage {
   remapVendorId(fromId: string, toId: string, updated: Vendor): Promise<void>
   remapOrderId(fromId: string, toId: string, updated: unknown): Promise<void>
   applyRemoteChange(x: { entityType: string; entityId: string; operation: string; payload: unknown }): Promise<void>
-  cacheRemoteImage(productId: string, representation: 'grid' | 'detail', url: string, version: number, expectedChecksum?: string, expectedSize?: number): Promise<void>
-  resolveDetailImage(product: Product): Promise<string>
   resetLocalData(): Promise<void>
 }
 class SqliteOpfsStorage implements CatalogueStorage {
- private db=new LocalSqlite();private ready=this.bootstrap()
- private imageMemoryCache=new Map<string,string>()
- private cacheImageInMemory(path:string,data:string){
-   if(this.imageMemoryCache.size>=250){
-     const oldest=this.imageMemoryCache.keys().next().value
-     if(oldest)this.imageMemoryCache.delete(oldest)
+ private db=new LocalSqlite();private requeued=0;private ready=this.bootstrap().then(()=>this.requeueUnsentProducts())
+ // Design code -> product ids, kept in memory so saving a product never re-reads the whole catalogue
+ // (the old per-save scan made a 10,000-product download quadratic).
+ private codeIndex:Map<string,Set<string>>|null=null
+ private codeOfId=new Map<string,string>()
+ // Designs that exist only on this device but have nothing waiting in the upload queue. An older app version erased
+ // failed uploads at start-up (for example while the device was signed out), which left such designs stranded forever:
+ // on screen, but never sent to the cloud. They are put back in the queue here; designs held back for a code clash are
+ // left alone. Operations that ran out of retries get a fresh set, once per app start.
+ private async requeueUnsentProducts(){
+  try{
+   if(!this.db.isAvailable())return
+   await this.db.execute("UPDATE pending_operations SET retry_count=0,state='PENDING_UPLOAD' WHERE entity_type='product' AND operation='UPSERT' AND retry_count>=25")
+   const rows=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND deleted=0 AND json_extract(payload,'$.heldBack') IS NULL AND (COALESCE(json_extract(payload,'$.gridImageKey'),'')='' OR COALESCE(json_extract(payload,'$.detailImageKey'),'')='')")
+   if(!rows.rows?.length)return
+   const queued=new Set(((await this.db.execute("SELECT json_extract(payload,'$.id') id FROM pending_operations WHERE entity_type='product' AND operation IN ('UPSERT','RESTORE')")).rows||[]).map(r=>String((r as {id:string|null}).id||'')))
+   for(const r of rows.rows as {id:string}[]){
+    if(queued.has(r.id))continue
+    await this.db.queueOperation('product','UPSERT',{id:r.id})
+    this.requeued++
    }
-   this.imageMemoryCache.set(path,data)
+  }catch(error){console.warn('Could not re-queue designs waiting to upload:',error)}
  }
- private async bootstrap(){if(typeof navigator!=='undefined'&&'storage' in navigator&&typeof navigator.storage.persist==='function'){void navigator.storage.persist().catch(()=>{})};if(!this.db.isAvailable())return;try{await this.db.execute('CREATE TABLE IF NOT EXISTS local_entities(entity_type TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(entity_type,id))');if(await this.db.checkpoint('storage_schema_version')!=='5'){await this.db.execute("DELETE FROM local_entities WHERE (entity_type='product' AND id IN ('p1','p2')) OR (entity_type='category' AND id='rings') OR (entity_type='subcategory' AND id='solitaire') OR (entity_type='vendor' AND id='v1')");await this.db.setCheckpoint('storage_schema_version','5')};await this.db.execute("DELETE FROM pending_operations WHERE state='ERROR'");const pending=await this.db.execute("SELECT id,entity_type,operation,payload FROM pending_operations");for(const op of (pending.rows||[]) as {id:string;entity_type:string;operation:string;payload:string}[]){if(op.entity_type==='product'){try{const parsed=JSON.parse(op.payload) as {id?:string};if(parsed?.id){if(op.operation==='ARCHIVE'){const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=?",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}else{const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=? AND deleted=0",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}}}catch{await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}};const vRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='vendor' AND deleted=0");const seenV=new Set<string>();for(const r of (vRows.rows||[]) as {id:string;payload:string}[]){try{const v=JSON.parse(r.payload) as Vendor;const k=`${(v.name||'').trim().toLowerCase()}|${(v.address||'').trim().toLowerCase()}`;if(seenV.has(k)){await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id]);await this.db.execute("DELETE FROM pending_operations WHERE entity_type='vendor' AND id=?",[r.id])}else{seenV.add(k)}}catch{await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id])}};const oRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='order' AND deleted=0");const seenOrders=new Map<number,{id:string;hasItems:boolean}>();for(const r of (oRows.rows||[]) as {id:string;payload:string}[]){try{const o=JSON.parse(r.payload) as Order&{order_number?:number};const num=Number(o.orderNumber||o.order_number||0);const hasItems=Array.isArray(o.items)&&o.items.length>0;if(num>0){if(seenOrders.has(num)){const prev=seenOrders.get(num)!;if(hasItems&&!prev.hasItems){await this.db.execute("DELETE FROM local_entities WHERE entity_type='order' AND id=?",[prev.id]);seenOrders.set(num,{id:r.id,hasItems})}else{await this.db.execute("DELETE FROM local_entities WHERE entity_type='order' AND id=?",[r.id])}}else{seenOrders.set(num,{id:r.id,hasItems})}}}catch{/* ignore */}}}catch{/* ignore in test runner */}}
+ async pendingOperationCount(){await this.ready;const r=await this.db.execute("SELECT COUNT(*) n FROM pending_operations WHERE state IN ('PENDING_UPLOAD','ERROR')");return Number((r.rows?.[0] as {n:number}|undefined)?.n||0)}
+ async unsentDesignCount(){await this.ready;const r=await this.db.execute("SELECT COUNT(*) n FROM local_entities WHERE entity_type='product' AND (COALESCE(json_extract(payload,'$.gridImageKey'),'')='' OR COALESCE(json_extract(payload,'$.detailImageKey'),'')='' OR json_extract(payload,'$.syncState')!='SYNCED')");return Number((r.rows?.[0] as {n:number}|undefined)?.n||0)}
+ async requeuedAtStartup(){await this.ready;return this.requeued}
+ async productRecord(id:string){await this.ready;const row=(await this.db.execute("SELECT payload FROM local_entities WHERE entity_type='product' AND id=? AND deleted=0",[id])).rows?.[0] as {payload:string}|undefined;return row?JSON.parse(row.payload) as Product:null}
+ async heldBackProducts(){await this.ready;const x=await this.db.execute("SELECT payload FROM local_entities WHERE entity_type='product' AND deleted=0 AND json_extract(payload,'$.heldBack') IS NOT NULL ORDER BY updated_at DESC");return(x.rows||[]).map(r=>JSON.parse((r as {payload:string}).payload) as Product)}
+ async holdBackProduct(id:string,cloudId:string){
+  await this.ready
+  const row=(await this.db.execute("SELECT payload FROM local_entities WHERE entity_type='product' AND id=?",[id])).rows?.[0] as {payload:string}|undefined
+  if(!row)return
+  const p=JSON.parse(row.payload) as Product
+  await this.db.execute('UPDATE local_entities SET payload=?,updated_at=CURRENT_TIMESTAMP WHERE entity_type=? AND id=?',[JSON.stringify({...p,heldBack:{cloudId,at:new Date().toISOString()}}),'product',id])
+ }
+ private async productCodes(){
+  if(!this.codeIndex){
+   const rows=await this.db.execute("SELECT id,json_extract(payload,'$.designCode') code FROM local_entities WHERE entity_type='product' AND deleted=0")
+   const index=new Map<string,Set<string>>();this.codeOfId.clear()
+   for(const r of (rows.rows||[]) as {id:string;code:string|null}[]){
+    const code=String(r.code||'').trim().toLowerCase();if(!code)continue
+    let ids=index.get(code);if(!ids){ids=new Set();index.set(code,ids)}
+    ids.add(r.id);this.codeOfId.set(r.id,code)
+   }
+   this.codeIndex=index
+  }
+  return this.codeIndex
+ }
+ private forgetProductCode(id:string){
+  const code=this.codeOfId.get(id);if(code===undefined)return
+  this.codeOfId.delete(id);const ids=this.codeIndex?.get(code);if(ids){ids.delete(id);if(!ids.size)this.codeIndex!.delete(code)}
+ }
+ // Same idea for vendors (name+address) and orders (order number), which also used to re-read their whole table on
+ // every save — a first download with thousands of past orders slowed down quadratically.
+ private keyIndexes=new Map<string,{byKey:Map<string,Set<string>>;keyOf:Map<string,string>}>()
+ private async keyIndex(type:'vendor'|'order'){
+  let index=this.keyIndexes.get(type)
+  if(!index){
+   const sql=type==='vendor'
+    ?"SELECT id,lower(trim(json_extract(payload,'$.name')))||'|'||lower(trim(json_extract(payload,'$.address'))) k FROM local_entities WHERE entity_type='vendor' AND deleted=0"
+    :"SELECT id,CAST(COALESCE(NULLIF(json_extract(payload,'$.orderNumber'),0),json_extract(payload,'$.order_number'),0) AS INTEGER) k FROM local_entities WHERE entity_type='order' AND deleted=0"
+   const rows=await this.db.execute(sql)
+   index={byKey:new Map(),keyOf:new Map()}
+   for(const r of (rows.rows||[]) as {id:string;k:string|number|null}[]){
+    const k=r.k===null||r.k===undefined?'':String(r.k);if(!k||k==='0'||k==='|')continue
+    let ids=index.byKey.get(k);if(!ids){ids=new Set();index.byKey.set(k,ids)}
+    ids.add(r.id);index.keyOf.set(r.id,k)
+   }
+   this.keyIndexes.set(type,index)
+  }
+  return index
+ }
+ private forgetKey(type:string,id:string){
+  const index=this.keyIndexes.get(type);if(!index)return
+  const k=index.keyOf.get(id);if(k===undefined)return
+  index.keyOf.delete(id);const ids=index.byKey.get(k);if(ids){ids.delete(id);if(!ids.size)index.byKey.delete(k)}
+ }
+ private setKey(type:string,id:string,k:string){
+  const index=this.keyIndexes.get(type);if(!index)return
+  this.forgetKey(type,id);if(!k||k==='0'||k==='|')return
+  let ids=index.byKey.get(k);if(!ids){ids=new Set();index.byKey.set(k,ids)}
+  ids.add(id);index.keyOf.set(id,k)
+ }
+ async pendingOrderIds(){
+  await this.ready
+  const rows=await this.db.execute("SELECT json_extract(payload,'$.id') id FROM pending_operations WHERE entity_type='presentation'")
+  return new Set(((rows.rows||[]) as {id:string|null}[]).map(r=>String(r.id||'')).filter(Boolean))
+ }
+ private bulkDepth=0
+ async bulk<T>(work:()=>Promise<T>):Promise<T>{
+  await this.ready
+  if(this.bulkDepth++===0)await this.db.execute('BEGIN').catch(()=>{})
+  try{return await work()}
+  finally{if(--this.bulkDepth===0)await this.db.execute('COMMIT').catch(()=>{})}
+ }
+ private async bootstrap(){if(typeof navigator!=='undefined'&&'storage' in navigator&&typeof navigator.storage.persist==='function'){void navigator.storage.persist().catch(()=>{})};if(!this.db.isAvailable())return;try{await this.db.execute('CREATE TABLE IF NOT EXISTS local_entities(entity_type TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(entity_type,id))');if(await this.db.checkpoint('storage_schema_version')!=='5'){await this.db.execute("DELETE FROM local_entities WHERE (entity_type='product' AND id IN ('p1','p2')) OR (entity_type='category' AND id='rings') OR (entity_type='subcategory' AND id='solitaire') OR (entity_type='vendor' AND id='v1')");await this.db.setCheckpoint('storage_schema_version','5')};const pending=await this.db.execute("SELECT id,entity_type,operation,payload FROM pending_operations");for(const op of (pending.rows||[]) as {id:string;entity_type:string;operation:string;payload:string}[]){if(op.entity_type==='product'){try{const parsed=JSON.parse(op.payload) as {id?:string};if(parsed?.id){if(op.operation==='ARCHIVE'){const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=?",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}else{const check=await this.db.execute("SELECT id FROM local_entities WHERE entity_type='product' AND id=? AND deleted=0",[parsed.id]);if(!check.rows||check.rows.length===0){await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}}}catch{await this.db.execute("DELETE FROM pending_operations WHERE id=?",[op.id])}}};const vRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='vendor' AND deleted=0");const seenV=new Set<string>();for(const r of (vRows.rows||[]) as {id:string;payload:string}[]){try{const v=JSON.parse(r.payload) as Vendor;const k=`${(v.name||'').trim().toLowerCase()}|${(v.address||'').trim().toLowerCase()}`;if(seenV.has(k)){await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id]);await this.db.execute("DELETE FROM pending_operations WHERE entity_type='vendor' AND id=?",[r.id])}else{seenV.add(k)}}catch{await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[r.id])}};const pendingOrders=new Set(((await this.db.execute("SELECT json_extract(payload,'$.id') id FROM pending_operations WHERE entity_type='presentation'")).rows||[]).map(r=>String((r as {id:string|null}).id||'')));const oRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='order' AND deleted=0");const seenOrders=new Map<number,{id:string;hasItems:boolean}>();for(const r of (oRows.rows||[]) as {id:string;payload:string}[]){if(pendingOrders.has(r.id))continue;try{const o=JSON.parse(r.payload) as Order&{order_number?:number};const num=Number(o.orderNumber||o.order_number||0);const hasItems=Array.isArray(o.items)&&o.items.length>0;if(num>0){if(seenOrders.has(num)){const prev=seenOrders.get(num)!;if(hasItems&&!prev.hasItems){await this.db.execute("DELETE FROM local_entities WHERE entity_type='order' AND id=?",[prev.id]);seenOrders.set(num,{id:r.id,hasItems})}else{await this.db.execute("DELETE FROM local_entities WHERE entity_type='order' AND id=?",[r.id])}}else{seenOrders.set(num,{id:r.id,hasItems})}}}catch{/* ignore */}}}catch{/* ignore in test runner */}}
  private async save(type:string,id:string,value:unknown){
   if(type==='product'){
    const prod=value as Product
    if(prod.designCode){
-    const existingRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='product' AND deleted=0")
-    for(const r of existingRows.rows||[]){
-     const row=r as {id:string;payload:string}
-     if(row.id!==id){
-      try{
-       const p=JSON.parse(row.payload) as Product
-       if(p.designCode&&p.designCode.trim().toLowerCase()===prod.designCode.trim().toLowerCase()){
-        await this.db.execute("DELETE FROM local_entities WHERE entity_type='product' AND id=?",[row.id])
-       }
-      }catch{/* ignore parse error */}
-     }
+    // One design code = one product on this device: drop any other record carrying the same code.
+    const index=await this.productCodes(),code=prod.designCode.trim().toLowerCase()
+    if(this.codeOfId.get(id)!==code)this.forgetProductCode(id)
+    const ids=index.get(code)
+    // A cloud design and a design that exists only on this device (not uploaded yet, or held back for this very clash)
+    // never remove each other: both are kept, the catalogue shows the cloud one, and the device's design is listed in the
+    // Storage tab for a decision. Two records of the same kind with one code are still merged as before.
+    const incomingLocal=prod.syncState!=='SYNCED'||!!prod.heldBack
+    if(ids)for(const other of [...ids])if(other!==id){
+     const o=(await this.db.execute("SELECT json_extract(payload,'$.syncState') s,json_extract(payload,'$.heldBack') h FROM local_entities WHERE entity_type='product' AND id=?",[other])).rows?.[0] as {s:string|null;h:string|null}|undefined
+     if(o&&(!!o.h||o.s!=='SYNCED')!==incomingLocal)continue
+     await this.db.execute("DELETE FROM local_entities WHERE entity_type='product' AND id=?",[other]);ids.delete(other);this.codeOfId.delete(other)
     }
+    if(ids)ids.add(id);else index.set(code,new Set([id]))
+    this.codeOfId.set(id,code)
    }
   }
   if(type==='vendor'){
    const v=value as Vendor
    if(v.name&&v.address){
+    // One name+address = one vendor on this device.
     const normKey=`${v.name.trim().toLowerCase()}|${v.address.trim().toLowerCase()}`
-    const existingRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='vendor' AND deleted=0")
-    for(const r of existingRows.rows||[]){
-     const row=r as {id:string;payload:string}
-     if(row.id!==id){
-      try{
-       const ev=JSON.parse(row.payload) as Vendor
-       if(ev.name&&ev.address&&`${ev.name.trim().toLowerCase()}|${ev.address.trim().toLowerCase()}`===normKey){
-        await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[row.id])
-        await this.db.execute("DELETE FROM pending_operations WHERE entity_type='vendor' AND id=?",[row.id])
-       }
-      }catch{/* ignore */}
-     }
+    const index=await this.keyIndex('vendor')
+    for(const other of [...(index.byKey.get(normKey)||[])]){
+     if(other===id)continue
+     await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[other])
+     this.forgetKey('vendor',other)
     }
+    this.setKey('vendor',id,normKey)
    }
   }
   if(type==='order'){
    const ord=value as Order
    const ordNum=Number(ord.orderNumber||(ord as unknown as Record<string,unknown>).order_number||0)
    if(ordNum>0){
-    const existingRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='order' AND deleted=0")
-    for(const r of existingRows.rows||[]){
-     const row=r as {id:string;payload:string}
-     if(row.id!==id){
-      try{
-       const existing=JSON.parse(row.payload) as Order
-       const existingNum=Number(existing.orderNumber||(existing as unknown as Record<string,unknown>).order_number||0)
-       if(existingNum===ordNum){
-        await this.db.execute("DELETE FROM local_entities WHERE entity_type='order' AND id=?",[row.id])
-        await this.db.execute("DELETE FROM pending_operations WHERE entity_type='presentation' AND (payload LIKE ? OR id=?)",[`%"id":"${row.id}"%`,row.id])
-       }
-      }catch{/* ignore */}
+    // Clean up stale duplicates of an order number — but never touch an order that is still waiting to upload, and never
+    // let a waiting order remove a synced one. Two iPads working offline can pick the same number; both orders are kept
+    // and the cloud gives the waiting one its final number when it syncs.
+    const index=await this.keyIndex('order'),others=[...(index.byKey.get(String(ordNum))||[])].filter(other=>other!==id)
+    if(others.length){
+     const pending=await this.pendingOrderIds()
+     if(!pending.has(id))for(const other of others){
+      if(pending.has(other))continue
+      await this.db.execute("DELETE FROM local_entities WHERE entity_type='order' AND id=?",[other])
+      this.forgetKey('order',other)
      }
     }
    }
+   this.setKey('order',id,ordNum>0?String(ordNum):'')
   }
   await this.db.execute('INSERT INTO local_entities(entity_type,id,payload,deleted,updated_at) VALUES(?,?,?,0,CURRENT_TIMESTAMP) ON CONFLICT(entity_type,id) DO UPDATE SET payload=excluded.payload,deleted=0,updated_at=CURRENT_TIMESTAMP',[type,id,JSON.stringify(value)])
  }
  private async values<T>(type:string){await this.ready;const x=await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND deleted=0 ORDER BY updated_at',[type]);return(x.rows||[]).map(r=>JSON.parse((r as {payload:string}).payload) as T)}
  private async persistProduct(x:Product,queue:boolean){
-  let gridImage=x.gridImage,detailImage=x.detailImage;
-  const grid=`${x.id}-grid-v${x.imageVersion}`,detail=`${x.id}-detail-v${x.imageVersion}`;
-  if(x.gridImage.startsWith('data:')){
-   this.cacheImageInMemory(grid,x.gridImage);
-   await this.db.putImage(grid,x.gridImage);
-   gridImage=grid;
+  // Editing a held-back design sends it through the code check again.
+  let record:Product=queue&&x.heldBack?{...x,heldBack:undefined}:x
+  const hasGrid=(x.gridImage||'').startsWith('data:'),hasDetail=(x.detailImage||'').startsWith('data:')
+  if(hasGrid||hasDetail){
+   // A photo taken/chosen on this device. The pictures go to the image store as real files (thumbnail, 600px upload
+   // source, high-res); the product record keeps only their checksums, never the picture itself.
+   const grid=dataUrlToBytes(hasGrid?x.gridImage:x.detailImage).bytes,detail=dataUrlToBytes(hasDetail?x.detailImage:x.gridImage).bytes
+   record={...record,gridImage:'',detailImage:'',gridImageKey:undefined,detailImageKey:undefined,gridImageChecksum:await sha256Hex(grid),detailImageChecksum:await sha256Hex(detail),gridImageSizeBytes:grid.length,detailImageSizeBytes:detail.length}
+   await imageStore.saveLocal(record,grid,detail)
   }
-  if(x.detailImage.startsWith('data:')){
-   this.cacheImageInMemory(detail,x.detailImage);
-   await this.db.putImage(detail,x.detailImage);
-   detailImage=detail;
-  }
-  await this.save('product',x.id,{...x,gridImage,detailImage});
+  await this.save('product',x.id,record);
   if(queue&&x.syncState!=='SYNCED'){
    await this.db.queueOperation('product','UPSERT',{id:x.id});
   }
  }
-  private async resolvePath(path: string, representation: 'grid' | 'detail', key?: string, sizeBytes?: number): Promise<string> {
-    if (representation === 'detail' && sizeBytes !== undefined && sizeBytes > 0 && sizeBytes < 1000) {
-      key = undefined
-    }
-    if (path) {
-      if (path.startsWith('data:') || path.startsWith('http://') || path.startsWith('https://')) return path
-      if (this.imageMemoryCache.has(path)) {
-        const cached = this.imageMemoryCache.get(path)!
-        this.imageMemoryCache.delete(path)
-        this.imageMemoryCache.set(path, cached)
-        return cached
-      }
-      try {
-        const data = await this.db.getImage(path)
-        if (data && data.startsWith('data:')) {
-          this.cacheImageInMemory(path, data)
-          return data
-        }
-      } catch { /* not cached locally */ }
-    }
-    const r2Base = (import.meta.env.VITE_R2_PUBLIC_BASE_URL || 'https://pub-ddd4389cc31a46b6b365e21911f96e1f.r2.dev').replace(/\/$/, '')
-    if (key) return `${r2Base}/${key.split('/').map(encodeURIComponent).join('/')}`
-    return ''
-  }
-  async resolveDetailImage(product: Product): Promise<string> {
-    const resolved = await this.resolvePath(product.detailImage, 'detail', product.detailImageKey, product.detailImageSizeBytes)
-    if (resolved && (resolved.startsWith('data:') || resolved.startsWith('http://') || resolved.startsWith('https://'))) {
-      if (resolved.startsWith('http') && typeof navigator !== 'undefined' && navigator.onLine && product.detailImageKey) {
-        const path = `${product.id}-detail-v${product.imageVersion}`
-        void this.hasImage(path).then(has => {
-          if (!has) {
-            void this.cacheRemoteImage(product.id, 'detail', resolved, product.imageVersion, product.detailImageChecksum, product.detailImageSizeBytes).catch(() => {})
-          }
-        })
-      }
-      return resolved
-    }
-    return product.gridImage || ''
-  }
-  private async resolveProductImages(items: Product[]): Promise<Product[]> {
-    return Promise.all(items.map(async item => {
-      const grid = await this.resolvePath(item.gridImage, 'grid', item.gridImageKey, item.gridImageSizeBytes)
-      return { ...item, gridImage: grid }
-    }))
-  }
   async products(): Promise<Product[]> {
     const items = await this.values<Product>('product')
     const byCode = new Map<string, Product>()
@@ -203,13 +249,12 @@ class SqliteOpfsStorage implements CatalogueStorage {
       if (!curr) { byCode.set(key, item) }
       else if (curr.syncState !== 'SYNCED' && item.syncState === 'SYNCED') { byCode.set(key, item) }
     }
-    return this.resolveProductImages(Array.from(byCode.values()))
+    return Array.from(byCode.values())
   }
   async archivedProducts(): Promise<Product[]> {
     await this.ready
     const x = await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND deleted=1 ORDER BY updated_at DESC', ['product'])
-    const items = (x.rows || []).map(r => JSON.parse((r as { payload: string }).payload) as Product)
-    return this.resolveProductImages(items)
+    return (x.rows || []).map(r => JSON.parse((r as { payload: string }).payload) as Product)
   }
   async deleteProduct(id: string): Promise<void> {
     await this.ready
@@ -217,15 +262,9 @@ class SqliteOpfsStorage implements CatalogueStorage {
     const row = res.rows?.[0] as { payload: string } | undefined
     if (row) {
       const p = JSON.parse(row.payload) as Product
-      const gridPath = `${p.id}-grid-v${p.imageVersion}`
-      const detailPath = `${p.id}-detail-v${p.imageVersion}`
-      await this.deleteImage(gridPath)
-      await this.deleteImage(detailPath)
-      if (p.gridImage && !p.gridImage.startsWith('data:') && !p.gridImage.startsWith('http')) await this.deleteImage(p.gridImage)
-      if (p.detailImage && !p.detailImage.startsWith('data:') && !p.detailImage.startsWith('http')) await this.deleteImage(p.detailImage)
-      await this.db.execute('DELETE FROM local_image_metadata WHERE product_id=?', [id])
-      await this.db.execute('DELETE FROM storage_accounting WHERE key LIKE ?', [`%${id}%`])
       await this.db.execute('DELETE FROM local_entities WHERE entity_type=? AND id=?', ['product', id])
+      this.forgetProductCode(id)
+      await imageStore.removeProduct(id)
       await this.db.queueOperation('product', 'DELETE', { id, gridImageKey: p.gridImageKey, detailImageKey: p.detailImageKey })
     }
   }
@@ -254,10 +293,6 @@ class SqliteOpfsStorage implements CatalogueStorage {
     await this.persistProduct({ ...product, syncState: 'PENDING_UPLOAD' }, true)
   }
  async hasLocalReplica(){await this.ready;const result=await this.db.execute("SELECT COUNT(*) count FROM local_entities WHERE entity_type='product' AND deleted=0");return Number((result.rows?.[0] as {count:number}|undefined)?.count||0)>0}
- async getImage(path:string):Promise<string|null>{if(!path)return null;if(path.startsWith('data:'))return path;if(this.imageMemoryCache.has(path))return this.imageMemoryCache.get(path)!;await this.ready;try{const data=await this.db.getImage(path);if(data&&data.startsWith('data:')){this.cacheImageInMemory(path,data);return data}}catch{/* not in local storage */}return null}
- async saveImageData(path:string,dataUrl:string):Promise<void>{if(!path||!dataUrl)return;this.cacheImageInMemory(path,dataUrl);await this.ready;try{await this.db.putImage(path,dataUrl)}catch{/* ignore */}}
- async hasImage(path:string){if(this.imageMemoryCache.has(path))return true;await this.ready;return this.db.hasImage(path)}
- async deleteImage(path:string){this.imageMemoryCache.delete(path);await this.ready;return this.db.deleteImage(path)}
   async categories(): Promise<Category[]> {
     return (await this.values<Category>('category')).filter(x => x.active)
   }
@@ -372,6 +407,7 @@ class SqliteOpfsStorage implements CatalogueStorage {
   async deleteVendor(id: string): Promise<void> {
     await this.ready
     await this.db.execute('DELETE FROM local_entities WHERE entity_type=? AND id=?', ['vendor', id])
+    this.forgetKey('vendor', id)
     await this.db.queueOperation('vendor', 'DELETE', { id })
   }
   async archiveVendor(id: string): Promise<void> {
@@ -451,9 +487,12 @@ class SqliteOpfsStorage implements CatalogueStorage {
       }
     }
 
+    const pending = await this.pendingOrderIds()
     const byNumber = new Map<number, Order>()
     const unnumbered: Order[] = []
     for (const ord of byId.values()) {
+      // An order still waiting to upload is always listed, even if another order shows the same number for now.
+      if (pending.has(ord.id)) { unnumbered.push(ord); continue }
       if (ord.orderNumber && ord.orderNumber > 0) {
         const existing = byNumber.get(ord.orderNumber)
         if (!existing) {
@@ -476,7 +515,7 @@ class SqliteOpfsStorage implements CatalogueStorage {
   }
  async session(){return(await this.values<Session>('offline-authorization'))[0]||null}
  async saveCategory(x:Category){await this.ready;await this.save('category',x.id,x);await this.db.queueOperation('category','UPSERT',x)} async saveSubcategory(x:Subcategory){await this.ready;await this.save('subcategory',x.id,x);await this.db.queueOperation('subcategory','UPSERT',x)} async saveVendor(x:Vendor){await this.ready;await this.save('vendor',x.id,x);await this.db.queueOperation('vendor','UPSERT',x)} async saveProduct(x:Product,queue=x.syncState!=='SYNCED'){await this.ready;await this.persistProduct(x,queue)} async saveOrder(x:Order){await this.ready;await this.save('order',x.id,x);await this.db.queueOperation('presentation','FINALIZE',x)}
- async saveSession(x:Session){await this.ready;await this.save('offline-authorization',x.userId,x);await this.db.setCheckpoint('offline_authorization_expires_at',x.offlineAuthorizationExpiresAt)} async clearSession(){await this.ready;await this.db.execute("UPDATE local_entities SET deleted=1,updated_at=CURRENT_TIMESTAMP WHERE entity_type='offline-authorization'")} async storageBytes(){await this.ready;const x=await this.db.execute('SELECT COALESCE(SUM(bytes),0) bytes FROM storage_accounting');return Number((x.rows?.[0] as {bytes:number}|undefined)?.bytes||0)}
+ async saveSession(x:Session){await this.ready;await this.save('offline-authorization',x.userId,x);await this.db.setCheckpoint('offline_authorization_expires_at',x.offlineAuthorizationExpiresAt)} async clearSession(){await this.ready;await this.db.execute("UPDATE local_entities SET deleted=1,updated_at=CURRENT_TIMESTAMP WHERE entity_type='offline-authorization'")} async storageBytes(){return (await imageStore.usage())?.usage||0}
  async syncCheckpoint(){await this.ready;return Number(await this.db.checkpoint('sync_checkpoint')||0)} async setSyncCheckpoint(x:number){await this.ready;await this.db.setCheckpoint('sync_checkpoint',String(x))}
   async pendingOperations() {
     await this.ready;
@@ -523,10 +562,7 @@ class SqliteOpfsStorage implements CatalogueStorage {
   if(fromId!==toId){
    await this.db.execute("DELETE FROM local_entities WHERE entity_type='product' AND id=?",[fromId])
    await this.db.execute("DELETE FROM pending_operations WHERE entity_type='product' AND payload LIKE ?",[`%"id":"${fromId}"%`])
-   const oldGrid=`${fromId}-grid-v${updated.imageVersion}`,newGrid=`${toId}-grid-v${updated.imageVersion}`
-   const oldDetail=`${fromId}-detail-v${updated.imageVersion}`,newDetail=`${toId}-detail-v${updated.imageVersion}`
-   if(this.imageMemoryCache.has(oldGrid))this.cacheImageInMemory(newGrid,this.imageMemoryCache.get(oldGrid)!)
-   if(this.imageMemoryCache.has(oldDetail))this.cacheImageInMemory(newDetail,this.imageMemoryCache.get(oldDetail)!)
+   this.forgetProductCode(fromId)
   }
   await this.persistProduct(updated,false)
  }
@@ -534,6 +570,7 @@ class SqliteOpfsStorage implements CatalogueStorage {
   if(fromId===toId)return;
   await this.ready;
   await this.db.execute("DELETE FROM local_entities WHERE entity_type='vendor' AND id=?",[fromId]);
+  this.forgetKey('vendor',fromId);
   await this.db.execute("DELETE FROM pending_operations WHERE entity_type='vendor' AND id=?",[fromId]);
   await this.save('vendor',toId,updated);
   const orderRows=await this.db.execute("SELECT id,payload FROM local_entities WHERE entity_type='order' AND deleted=0");
@@ -551,39 +588,11 @@ class SqliteOpfsStorage implements CatalogueStorage {
   if(fromId===toId)return;
   await this.ready;
   await this.db.execute("DELETE FROM local_entities WHERE entity_type='order' AND id=?",[fromId]);
+  this.forgetKey('order',fromId);
   await this.db.execute("DELETE FROM pending_operations WHERE entity_type='presentation' AND (payload LIKE ? OR id=?)",[`%"id":"${fromId}"%`,fromId]);
   await this.save('order',toId,updated);
  }
- async applyRemoteChange(x:{entityType:string;entityId:string;operation:string;payload:unknown}){await this.ready;if(x.operation==='ARCHIVE'||x.operation==='DELETE'){if(x.entityType==='product'){const res=await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?',['product',x.entityId]);const row=res.rows?.[0] as {payload:string}|undefined;if(row){const p=JSON.parse(row.payload) as Product;await this.deleteImage(`${p.id}-grid-v${p.imageVersion}`);await this.deleteImage(`${p.id}-detail-v${p.imageVersion}`);}await this.db.execute('DELETE FROM local_image_metadata WHERE product_id=?',[x.entityId]);await this.db.execute('DELETE FROM storage_accounting WHERE key LIKE ?',[`%${x.entityId}%`]);}await this.db.execute('DELETE FROM local_entities WHERE entity_type=? AND id=?',[x.entityType,x.entityId]);return}const type=x.entityType==='presentation'?'order':x.entityType;const payload=x.payload as Record<string,unknown>;await this.save(type,x.entityId,{...payload,id:x.entityId})}
- async cacheRemoteImage(productId:string,representation:'grid'|'detail',url:string,version:number,expectedChecksum?:string,expectedSize?:number){
-  const response=await fetch(url)
-  if(!response.ok)throw new Error(`Image recovery download failed (${response.status})`)
-  const buffer=await response.arrayBuffer()
-  if(expectedSize!==undefined&&expectedSize>0&&buffer.byteLength!==expectedSize){
-   throw new Error(`Downloaded image size (${buffer.byteLength}) does not match expected size (${expectedSize}).`)
-  }
-  const hashBuffer=await crypto.subtle.digest('SHA-256',buffer)
-  const checksum=Array.from(new Uint8Array(hashBuffer)).map(b=>b.toString(16).padStart(2,'0')).join('')
-  if(expectedChecksum&&checksum.toLowerCase()!==expectedChecksum.toLowerCase()){
-   throw new Error(`Downloaded image checksum does not match expected checksum.`)
-  }
-  const contentType=response.headers.get('content-type')||'image/jpeg'
-  const bytes=new Uint8Array(buffer)
-  let binary=''
-  const len=bytes.byteLength
-  for(let i=0;i<len;i+=8192){binary+=String.fromCharCode(...bytes.subarray(i,Math.min(i+8192,len)))}
-  const data=`data:${contentType};base64,${btoa(binary)}`
-  const path=`${productId}-${representation}-v${version}`
-  this.cacheImageInMemory(path,data)
-  await this.db.putImage(path,data)
-  await this.db.execute('INSERT INTO local_image_metadata(image_key,product_id,representation,size_bytes,checksum,image_version,local_path,integrity_state,updated_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(image_key) DO UPDATE SET size_bytes=excluded.size_bytes,checksum=excluded.checksum,local_path=excluded.local_path,integrity_state=excluded.integrity_state,updated_at=CURRENT_TIMESTAMP',[`${productId}/${representation}/v${version}`,productId,representation,buffer.byteLength,checksum,version,path,'VERIFIED'])
-  const result=await this.db.execute('SELECT payload FROM local_entities WHERE entity_type=? AND id=?',['product',productId])
-  const record=result.rows?.[0] as {payload:string}|undefined
-  if(record){
-   const product=JSON.parse(record.payload) as Product
-   await this.save('product',productId,{...product,[representation==='grid'?'gridImage':'detailImage']:path})
-  }
- }
+ async applyRemoteChange(x:{entityType:string;entityId:string;operation:string;payload:unknown}){await this.ready;if(x.operation==='ARCHIVE'||x.operation==='DELETE'){if(x.entityType==='product'){this.forgetProductCode(x.entityId);await imageStore.removeProduct(x.entityId)}await this.db.execute('DELETE FROM local_entities WHERE entity_type=? AND id=?',[x.entityType==='presentation'?'order':x.entityType,x.entityId]);this.forgetKey(x.entityType==='presentation'?'order':x.entityType,x.entityId);return}const type=x.entityType==='presentation'?'order':x.entityType;const payload=x.payload as Record<string,unknown>;await this.save(type,x.entityId,{...payload,id:x.entityId})}
  async resetLocalData(): Promise<void> {
   await this.ready
   await this.db.execute("DELETE FROM local_entities WHERE entity_type != 'offline-authorization'")
@@ -591,22 +600,8 @@ class SqliteOpfsStorage implements CatalogueStorage {
   await this.db.execute("DELETE FROM local_image_metadata")
   await this.db.execute("DELETE FROM storage_accounting")
   await this.db.setCheckpoint('sync_checkpoint', '0')
-  this.imageMemoryCache.clear()
-  try {
-   const storageObj = (navigator as unknown as { storage?: { getDirectory?: () => Promise<FileSystemDirectoryHandle> } }).storage
-   if (storageObj && typeof storageObj.getDirectory === 'function') {
-    const root = await storageObj.getDirectory()
-    try {
-     const imagesHandle = await root.getDirectoryHandle('shine-jewels-images', { create: false })
-     // @ts-expect-error entries() iteration
-     for await (const [name] of imagesHandle.entries()) {
-      try {
-       await imagesHandle.removeEntry(name)
-      } catch { /* ignore individual removal */ }
-     }
-    } catch { /* folder might not exist */ }
-   }
-  } catch { /* ignore OPFS errors */ }
+  this.codeIndex=null;this.codeOfId.clear();this.keyIndexes.clear()
+  await imageStore.wipe()
  }
 }
 export const storage:CatalogueStorage=new SqliteOpfsStorage()

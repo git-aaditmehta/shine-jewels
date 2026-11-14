@@ -9,6 +9,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
+import { startMockCloud } from './mock-cloud.mjs'
 
 const PORT = 4321, ORIGIN = `http://localhost:${PORT}`, COUNT = 1296
 const sleep = ms => new Promise(r => setTimeout(r, ms))
@@ -18,16 +19,19 @@ const check = (name, ok, info = '') => { checks.push({ name, ok }); console.log(
 const preview = spawn('npx', ['vite', 'preview', '--config', 'bench/vite.bench.config.ts', '--port', String(PORT), '--strictPort'], { stdio: 'ignore' })
 for (let i = 0; i < 60; i++) { try { if ((await fetch(ORIGIN)).ok) break } catch { /* wait */ } await sleep(250) }
 
+const cloud = await startMockCloud()
 const dir = await mkdtemp(join(tmpdir(), 'shine-verify-'))
 const context = await webkit.launchPersistentContext(dir, { headless: true, viewport: { width: 1180, height: 820 }, deviceScaleFactor: 2, hasTouch: true, serviceWorkers: 'block' })
 try {
-  await context.route(/\.workers\.dev\//, route => route.fulfill({ status: route.request().method() === 'OPTIONS' ? 204 : 200, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization,content-type', 'content-type': 'application/json' }, body: route.request().method() === 'OPTIONS' ? '' : JSON.stringify(/sync\/changes|history|devices|staff/.test(route.request().url()) ? [] : { categories: [], subcategories: [], vendors: [], products: [], presentations: [], checkpoint: 1, ok: true }) }))
+  // Cloud traffic goes to the local mock (see mock-cloud.mjs); nothing reaches Cloudflare.
   const seed = await context.newPage(); await seed.goto(`${ORIGIN}/bench/seed.html`); await seed.waitForFunction(() => typeof window.seed === 'function')
-  await seed.evaluate(o => window.seed(o), { count: COUNT, cloudFraction: 0 }); await seed.close(); await sleep(500)
+  cloud.setVariants(await seed.evaluate(o => window.seed(o), { count: COUNT, cloudFraction: 0, detailSide: 400 })); await seed.close(); await sleep(500)
   await context.addInitScript(() => localStorage.setItem('shine-jewels.session', JSON.stringify({ userId: 'u', displayName: 'Bench', role: 'ADMIN', organizationId: 'bench', offlineAuthorizationExpiresAt: '2099-01-01T00:00:00.000Z', token: 't' })))
   const page = await context.newPage()
   await page.goto(ORIGIN)
   await page.waitForFunction(n => document.body.innerText.includes(`${n} designs`), COUNT, { timeout: 120000 })
+  // Let the one-time photo conversion finish so the grid is in its normal, steady state.
+  await page.waitForFunction(() => { const p = window.__sjImages?.progress(); return p && p.thumbs.total > 0 && p.thumbs.ready === p.thumbs.total }, null, { timeout: 180000 })
   await sleep(800)
 
   const cards = () => page.evaluate(() => document.querySelectorAll('.grid .product').length)
@@ -92,7 +96,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 }); await sleep(600)
   check('phone width uses 2 columns', (await cols()) === 2, `${await cols()} columns`)
 } finally {
-  await context.close(); await rm(dir, { recursive: true, force: true }); preview.kill()
+  await context.close(); await rm(dir, { recursive: true, force: true }); preview.kill(); await cloud.close()
 }
 const failed = checks.filter(c => !c.ok).length
 console.log(`\n${checks.length - failed}/${checks.length} checks passed`)

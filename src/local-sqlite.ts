@@ -46,6 +46,8 @@ export class LocalSqlite {
   }
 
   async checkpoint(key:string){const result=await this.execute('SELECT value FROM local_sync_state WHERE key=?',[key]);return (result.rows?.[0] as {value:string}|undefined)?.value}
-  async pendingOperations(){const result=await this.execute("SELECT id,idempotency_key,entity_type,operation,payload,retry_count FROM pending_operations WHERE state IN ('PENDING_UPLOAD','ERROR') ORDER BY created_at LIMIT 100");return result.rows||[]}
-  async operationState(id:string,state:'SYNCED'|'ERROR',error?:string){if(state==='SYNCED'||(error&&error.includes('no longer exists'))){await this.execute('DELETE FROM pending_operations WHERE id=?',[id])}else{await this.execute('UPDATE pending_operations SET state=?,last_error=?,retry_count=retry_count+CASE WHEN ? IS NULL THEN 0 ELSE 1 END,updated_at=CURRENT_TIMESTAMP WHERE id=?',[state,error||null,error||null,id])}}
+  // A push that failed is kept and retried on later syncs (it used to be erased at the next app start, losing the
+  // offline order or design). Work that has not been tried yet goes first, then failed work, least recently tried first (timestamps are ISO text so they sort correctly); an operation that has failed 25 times stops being retried.
+  async pendingOperations(){const result=await this.execute("SELECT id,idempotency_key,entity_type,operation,payload,retry_count FROM pending_operations WHERE state IN ('PENDING_UPLOAD','ERROR') AND retry_count<25 ORDER BY updated_at,created_at LIMIT 100");return result.rows||[]}
+  async operationState(id:string,state:'SYNCED'|'ERROR',error?:string){if(state==='SYNCED'||(error&&error.includes('no longer exists'))){await this.execute('DELETE FROM pending_operations WHERE id=?',[id])}else{await this.execute("UPDATE pending_operations SET state=?,last_error=?,retry_count=retry_count+CASE WHEN ? IS NULL THEN 0 ELSE 1 END,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",[state,error||null,error||null,id])}}
 }

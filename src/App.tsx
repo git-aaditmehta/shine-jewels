@@ -1,4 +1,4 @@
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 export class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: string }> {
   constructor(props: { children: ReactNode }) {
@@ -27,7 +27,11 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { hasError
   }
 }
 import { login, workerApi } from './api'
-import { cloudImageStorageBytes, initialDownload, push, recoverMissingImages, synchronize, uploadPendingProductImages } from './sync'
+import { cloudImageStorageBytes, initialDownload, push, synchronize, uploadPendingProductImages } from './sync'
+import { isSignInError } from './api'
+import { imageStore } from './image-store'
+import { imageName } from './image-names'
+import { ImageSyncBadge, ImageSyncPanel, ProductThumb } from './StoredImage'
 import { createBothOrderPdfs, createSalesDemoPdfBlob, downloadPdfBlob, sharePdfFile, type GeneratedPdfResult } from './pdf'
 import { storage } from './storage'
 import type { Category, DeviceSession, Order, Product, Session, StaffUser, Subcategory, Vendor, VendorRepresentative } from './types'
@@ -39,6 +43,7 @@ import { VirtualGrid } from './VirtualGrid'
 
 const grams=(mg:number)=>(mg/1000).toFixed(3)
 const uid=()=>crypto.randomUUID()
+const ADMIN_LIST_LIMIT=100
 type View='catalogue'|'history'|'vendors'|'products'|'batch'|'taxonomy'|'storage'|'devices'
 const sessionKey='shine-jewels.session'
 const deviceKey='shine-jewels.device-id'
@@ -201,7 +206,7 @@ function Login({onSession}:{onSession:(session:Session)=>void}){
 export function App(){
  const [session,setSession]=useState<Session|null>(()=>getStoredSession())
  const [products,setProducts]=useState<Product[]>([]),[categories,setCategories]=useState<Category[]>([]),[subcategories,setSubcategories]=useState<Subcategory[]>([]),[vendors,setVendors]=useState<Vendor[]>([]),[orders,setOrders]=useState<Order[]>([])
- const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number|'';remark:string}>>({}),[vendorId,setVendorId]=useState(''),[vendorRepresentatives,setVendorRepresentatives]=useState<VendorRepresentative[]>([{name:'',phone:''}]),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[generatingPdf,setGeneratingPdf]=useState(false),[bytes,setBytes]=useState(0),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<DeviceSession[]>([])
+ const [view,setView]=useState<View>('catalogue'),[query,setQuery]=useState(''),[category,setCategory]=useState(''),[subcategory,setSubcategory]=useState(''),[minWeight,setMinWeight]=useState(''),[maxWeight,setMaxWeight]=useState(''),[sliderActive,setSliderActive]=useState<'min'|'max'>('max'),[selected,setSelected]=useState<Record<string,{quantity:number|'';remark:string}>>({}),[vendorId,setVendorId]=useState(''),[vendorRepresentatives,setVendorRepresentatives]=useState<VendorRepresentative[]>([{name:'',phone:''}]),[notice,setNotice]=useState(''),[detail,setDetail]=useState<Product|null>(null),[generatingPdf,setGeneratingPdf]=useState(false),[cloudBytes,setCloudBytes]=useState<number|null>(null),[uploading,setUploading]=useState(false),[syncing,setSyncing]=useState(false),[recovering,setRecovering]=useState(false),[syncCheckpointVal,setSyncCheckpointVal]=useState(0),[pendingCount,setPendingCount]=useState(0),[online,setOnline]=useState(navigator.onLine),[devices,setDevices]=useState<DeviceSession[]>([])
  const [logoModalOpen,setLogoModalOpen]=useState(false)
  const [demoMode,setDemoMode]=useState(false)
  const [demoSelected,setDemoSelected]=useState<Record<string,boolean>>({})
@@ -215,6 +220,7 @@ export function App(){
    }
    demoPdf?: GeneratedPdfResult
  } | null>(null)
+ const [heldBackList,setHeldBackList]=useState<Product[]>([]),[unsentDesigns,setUnsentDesigns]=useState(0)
  const [editingProduct,setEditingProduct]=useState<Product|null>(null),[archivingProduct,setArchivingProduct]=useState<Product|null>(null),[archivedProductsList,setArchivedProductsList]=useState<Product[]>([]),[adminProductTab,setAdminProductTab]=useState<'active'|'add'|'archived'>('active'),[adminSearch,setAdminSearch]=useState('')
  const [archivedVendorsList,setArchivedVendorsList]=useState<Vendor[]>([]),[archivedCategoriesList,setArchivedCategoriesList]=useState<Category[]>([]),[archivedSubcategoriesList,setArchivedSubcategoriesList]=useState<Subcategory[]>([])
  const [editingVendor,setEditingVendor]=useState<Vendor|null>(null),[archivingVendor,setArchivingVendor]=useState<Vendor|null>(null),[adminVendorTab,setAdminVendorTab]=useState<'active'|'add'|'archived'>('active'),[vendorSearch,setVendorSearch]=useState(''),[adminDeviceTab,setAdminDeviceTab]=useState<'active'|'staff'|'add_staff'|'all'>('active')
@@ -254,20 +260,23 @@ export function App(){
    return
   }
   let active=true
-  const isCorruptDetail = detail.detailImageSizeBytes !== undefined && detail.detailImageSizeBytes > 0 && detail.detailImageSizeBytes < 1000
-  const fallback = (!isCorruptDetail && (detail.detailImage?.startsWith('data:') || detail.detailImage?.startsWith('http')))
-    ? detail.detailImage
-    : detail.gridImage
-  setResolvedDetailUrl(fallback)
-  storage.resolveDetailImage(detail).then(url=>{
-   if(active&&url){
-    setResolvedDetailUrl(url)
-   }
-  }).catch(()=>{
-   if(active)setResolvedDetailUrl(detail.gridImage)
-  })
-  return()=>{active=false}
- },[detail?.id,detail?.detailImage,detail?.gridImage,detail?.detailImageSizeBytes])
+  const thumbName=imageName(detail,'thumb'),detailName=imageName(detail,'detail')
+  // Paint instantly with what is already in memory (the tile's thumbnail), then swap in the high-res file from this
+  // device. If the high-res is not downloaded yet it jumps the download queue and appears as soon as it arrives.
+  setResolvedDetailUrl(imageStore.peek(detailName)||imageStore.peek(thumbName)||'')
+  imageStore.retain(detailName)
+  const show=async()=>{
+   const url=(await imageStore.url(detailName,detail.detailImageSizeBytes))??(await imageStore.url(thumbName))
+   if(active&&url)setResolvedDetailUrl(url)
+   return Boolean(imageStore.peek(detailName))
+  }
+  void show().then(hasDetail=>{if(!hasDetail&&active)void imageStore.ensure(detail,['detail'])})
+  const unsubscribe=imageStore.subscribe(detailName,()=>{void show()})
+  return()=>{active=false;unsubscribe();imageStore.release(detailName)}
+ },[detail?.id,detail?.detailImageChecksum,detail?.detailImageKey,detail?.gridImageChecksum,detail?.imageVersion])
+ // The admin list shows a bounded number of rows so it stays instant with 10,000+ designs; search reaches the rest.
+ const adminMatches=useMemo(()=>{const q=adminSearch.toLowerCase().trim();return view==='products'?products.filter(p=>!p.deleted&&(!q||p.designCode.toLowerCase().includes(q))):[]},[products,adminSearch,view])
+ const warmThumbs=useCallback((nearby:Product[])=>imageStore.prefetch(nearby.map(p=>imageName(p,'thumb'))),[])
  const clearFilters=()=>{setQuery('');setCategory('');setSubcategory('');setMinWeight('');setMaxWeight('')}
  const applyWeightPreset=(min:string,max:string)=>{setMinWeight(min);setMaxWeight(max)}
  const detailIndex = detail ? filtered.findIndex(p => p.id === detail.id) : -1
@@ -294,8 +303,9 @@ export function App(){
   window.addEventListener('keydown', handleKeyDown)
   return () => window.removeEventListener('keydown', handleKeyDown)
  }, [detail, activeIndex, activeList, hasPrev, hasNext])
-  const load=async()=>{const [p,c,s,v,o,b,cp,pending,archivedP,archivedV,archivedC,archivedS]=await Promise.all([storage.products(),storage.categories(),storage.subcategories(),storage.vendors(),storage.orders(),storage.storageBytes(),storage.syncCheckpoint(),storage.pendingOperations(),storage.archivedProducts(),storage.archivedVendors(),storage.archivedCategories(),storage.archivedSubcategories()]);setProducts(p);setCategories(c);setSubcategories(s);setVendors(v);setOrders(o);setBytes(b);setSyncCheckpointVal(cp);setPendingCount(pending.length);setArchivedProductsList(archivedP);setArchivedVendorsList(archivedV);setArchivedCategoriesList(archivedC);setArchivedSubcategoriesList(archivedS);return p}
-  const loadCloudStorage=async()=>{const token=getStoredToken();if(!token)return;try{setCloudBytes(await cloudImageStorageBytes(token))}catch{setCloudBytes(null)}}
+  const load=async()=>{const [p,c,s,v,o,cp,pending,archivedP,archivedV,archivedC,archivedS]=await Promise.all([storage.products(),storage.categories(),storage.subcategories(),storage.vendors(),storage.orders(),storage.syncCheckpoint(),storage.pendingOperations(),storage.archivedProducts(),storage.archivedVendors(),storage.archivedCategories(),storage.archivedSubcategories()]);const [held,queued,unsent]=await Promise.all([storage.heldBackProducts(),storage.pendingOperationCount(),storage.unsentDesignCount()]);setHeldBackList(held);setUnsentDesigns(unsent);void pending;setProducts(p);setCategories(c);setSubcategories(s);setVendors(v);setOrders(o);setSyncCheckpointVal(cp);setPendingCount(queued);setArchivedProductsList(archivedP);setArchivedVendorsList(archivedV);setArchivedCategoriesList(archivedC);setArchivedSubcategoriesList(archivedS);return p}
+  // Cloud photo size is summed from the catalogue already on this device — no request, so a sync never re-reads the whole cloud catalogue.
+  const loadCloudStorage=async()=>{try{setCloudBytes(cloudImageStorageBytes(await storage.products()))}catch{setCloudBytes(null)}}
   const loadDevices=async()=>{const token=getStoredToken();if(!token)return;try{const list=await workerApi<DeviceSession[]>('/devices',{token});setDevices(list)}catch(err){setNotice(err instanceof Error?err.message:'Unable to load devices')}}
   const revokeDevice=async(deviceId:string)=>{const token=getStoredToken();if(!token)return;try{await workerApi(`/devices/${deviceId}/revoke`,{method:'POST',token});setNotice('Device session revoked. Device will be logged out upon reconnect.');await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Unable to revoke device session')}}
   const deleteDevice=async(deviceId:string)=>{const token=getStoredToken();if(!token)return;try{await workerApi(`/devices/${deviceId}`,{method:'DELETE',token});setNotice('Device session removed.');await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Unable to remove device session')}}
@@ -305,10 +315,13 @@ export function App(){
   const handleToggleStaffActive=async(staffId:string)=>{const token=getStoredToken();if(!token)return;try{const res=await workerApi<{id:string;is_active:number}>(`/staff/${staffId}/toggle-active`,{method:'POST',token});setNotice(res.is_active===1?'Staff account activated.':'Staff account suspended and active sessions revoked.');await loadStaff();await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Failed to update staff status')}}
   const handleResetStaffPassword=async(e:React.FormEvent)=>{e.preventDefault();if(!resetPasswordStaff)return;const token=getStoredToken();if(!token)return;if(newResetPasswordValue.trim().length<4){setNotice('New password must be at least 4 characters.');return}setStaffActionSubmitting(true);try{await workerApi(`/staff/${resetPasswordStaff.id}/reset-password`,{method:'POST',token,body:{password:newResetPasswordValue.trim()}});setNotice(`Password updated successfully for @${resetPasswordStaff.username}.`);setResetPasswordStaff(null);setNewResetPasswordValue('')}catch(err){setNotice(err instanceof Error?err.message:'Failed to reset password')}finally{setStaffActionSubmitting(false)}}
   const handleDeleteStaff=async(staff:StaffUser)=>{if(!window.confirm(`Are you sure you want to permanently remove staff account "@${staff.username}"? Any active sessions will be terminated.`)){return}const token=getStoredToken();if(!token)return;try{await workerApi(`/staff/${staff.id}`,{method:'DELETE',token});setNotice(`Staff account "@${staff.username}" removed.`);await loadStaff();await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Failed to remove staff account')}}
-  const triggerSync=async()=>{const token=getStoredToken();if(!token||syncing||!navigator.onLine)return;setSyncing(true);try{const res=await synchronize(token,msg=>setNotice(msg));await load();await loadCloudStorage();setNotice(res.synced?`Sync complete: ${res.uploaded} uploaded, ${res.pulled} change(s) synced.`:'Device is offline.')}catch(err){setNotice(err instanceof Error?`Sync failed: ${err.message}`:'Sync failed.')}finally{setSyncing(false)}}
-  const triggerImageRecovery=async()=>{const token=getStoredToken();if(!token||recovering||!navigator.onLine)return;setRecovering(true);try{const res=await recoverMissingImages(token,msg=>setNotice(msg));await load();setNotice(`Recovery complete: ${res.recovered} restored, ${res.failed} unavailable.`)}catch(err){setNotice(err instanceof Error?`Recovery failed: ${err.message}`:'Recovery failed.')}finally{setRecovering(false)}}
+  const triggerSync=async()=>{const token=getStoredToken();if(!token||syncing||!navigator.onLine)return;setSyncing(true);try{const res=await synchronize(token,msg=>setNotice(msg));await load();await loadCloudStorage();setNotice(res.synced?`Sync complete: ${res.uploaded} uploaded, ${res.pulled} change(s) synced.${res.heldBack?` ${res.heldBack} design(s) kept on this device because the cloud already has a different design with the same code — see the Storage tab.`:''}`:'Device is offline.')}catch(err){if(isSignInError(err)){await load();setNotice('This iPad is signed out of the cloud, so nothing can sync. Log out and sign in again — every design, photo and order on this iPad is kept and uploads afterwards.')}else setNotice(err instanceof Error?`Sync failed: ${err.message}`:'Sync failed.')}finally{setSyncing(false)}}
+  const triggerImageRecovery=async()=>{if(recovering)return;setRecovering(true);try{setNotice('Checking every photo on this device…');await imageStore.rescan();setNotice('Photo check started. Anything missing or damaged is downloaded again — progress is shown below.')}finally{setRecovering(false)}}
   const uploadImages=async()=>{const token=getStoredToken();if(!token||uploading)return;setUploading(true);try{const result=await uploadPendingProductImages(token);await load();await loadCloudStorage();setNotice(result.failed?`${result.uploaded} product image upload(s) completed; ${result.failed} remain queued.`:`${result.uploaded} product image upload(s) completed to R2.`)}catch(error){setNotice(error instanceof Error?`Image upload failed: ${error.message}`:'Image upload failed. Local images remain intact.')}finally{setUploading(false)}}
   const handleResetLocalData=async()=>{
+    // Second, louder warning when the wipe would destroy work that exists only on this iPad.
+    const [unsent,queued]=await Promise.all([storage.unsentDesignCount(),storage.pendingOperationCount()])
+    if((unsent>0||queued>0)&&!window.confirm(`🛑 STOP — this iPad has work that is NOT in the cloud yet.\n\n• ${unsent} design(s) not uploaded\n• ${queued} change(s) waiting to upload\n\nWiping deletes them permanently. They cannot be recovered from the cloud.\n\nPress Cancel unless you are absolutely sure.`))return
     const confirmed=window.confirm(
       '⚠️ Reset Local Device Data?\n\n' +
       'This will wipe all local test products, categories, vendors, and orders stored in this device\'s offline cache.\n\n' +
@@ -362,6 +375,9 @@ export function App(){
     void init();
     return ()=>{active=false};
   },[session])
+  // Tell the photo downloader what this device should hold. It works out what is new, replaced or missing on its own.
+  // Held-back designs can be hidden from the catalogue behind a same-code cloud design; their photos must be kept too.
+  useEffect(()=>{if(session&&products.length){const shown=new Set(products.map(p=>p.id));imageStore.sync([...products,...archivedProductsList.filter(p=>!p.gridImageKey||!p.detailImageKey),...heldBackList.filter(p=>!shown.has(p.id))])}},[session,products,archivedProductsList,heldBackList])
   useEffect(()=>{const onOnline=()=>{setOnline(true);void triggerSync()};const onOffline=()=>{setOnline(false)};window.addEventListener('online',onOnline);window.addEventListener('offline',onOffline);return ()=>{window.removeEventListener('online',onOnline);window.removeEventListener('offline',onOffline)}},[session])
   useEffect(()=>{if(view==='history'&&online){void triggerSync()}},[view,online])
   useEffect(()=>{if(view==='devices'&&session?.role==='ADMIN'){void loadDevices();void loadStaff()}},[view,session?.role])
@@ -432,7 +448,7 @@ export function App(){
   if(!picks.length){setNotice('Select at least one design.');return};
   const max=Math.max(0,...orders.map(o=>o.orderNumber||0));
   const cleanedReps=vendorRepresentatives.map(r=>({name:r.name.trim(),phone:r.phone.trim()})).filter(r=>r.name||r.phone);
-  const order:Order={id:uid(),orderNumber:max+1,vendor,representatives:cleanedReps.length?cleanedReps:undefined,salesperson:session?.displayName||'Salesperson',status:'FINALIZED',createdAt:new Date().toISOString(),generatedAt:new Date().toISOString(),items:picks.map((p,index)=>({productId:p.id,serialNumber:index+1,designCode:p.designCode,category:categories.find(c=>c.id===p.categoryId)?.name||'',subcategory:subcategories.find(s=>s.id===p.subcategoryId)?.name||'',weightMg:p.weightMg,quantity:Number(selected[p.id].quantity)||1,remark:selected[p.id].remark,image:p.gridImage}))};
+  const order:Order={id:uid(),orderNumber:max+1,vendor,representatives:cleanedReps.length?cleanedReps:undefined,salesperson:session?.displayName||'Salesperson',status:'FINALIZED',createdAt:new Date().toISOString(),generatedAt:new Date().toISOString(),items:picks.map((p,index)=>({productId:p.id,serialNumber:index+1,designCode:p.designCode,category:categories.find(c=>c.id===p.categoryId)?.name||'',subcategory:subcategories.find(s=>s.id===p.subcategoryId)?.name||'',weightMg:p.weightMg,quantity:Number(selected[p.id].quantity)||1,remark:selected[p.id].remark,image:''}))};
   await storage.saveOrder(order);
   setOrders(o=>[order,...o]);
   setSelected({});
@@ -575,8 +591,7 @@ export function App(){
    await load();
    await loadCloudStorage();
 
-   const saved=sessionStorage.getItem(sessionKey);
-   const token=saved?(JSON.parse(saved) as {token:string}).token:'';
+   const token=getStoredToken();
    const isOnline=navigator.onLine&&Boolean(token);
 
    if(!isOnline){
@@ -595,8 +610,7 @@ export function App(){
     await storage.updateProduct(updated)
     await load()
     setNotice(`${updated.designCode} updated successfully.`)
-    const saved=sessionStorage.getItem(sessionKey)
-    const token=saved?(JSON.parse(saved) as {token:string}).token:''
+    const token=getStoredToken()
     if(navigator.onLine&&token){triggerBackgroundUpload()}
    }catch(err){setNotice(err instanceof Error?`Failed to update design: ${err.message}`:'Failed to update design.')}
   }
@@ -777,9 +791,8 @@ export function App(){
  const addCategory=async(c:Category)=>{await storage.saveCategory(c);await load();triggerBackgroundUpload()}
  const addSubcategory=async(s:Subcategory)=>{await storage.saveSubcategory(s);await load();triggerBackgroundUpload()}
  const cart=products.filter(p=>selected[p.id]); const total=cart.reduce((n,p)=>n+p.weightMg*(Number(selected[p.id].quantity)||1),0)
- if(!session) return <Login onSession={setSession} />
- const commonViews:View[]=['catalogue','history','vendors','products','batch','taxonomy','storage']
- const views=(session.role==='ADMIN'?[...commonViews,'devices']:commonViews) as View[]
+  // Every hook must run before this early return: React requires the same hooks on every render, and a hook placed
+  // after it crashed the app on each fresh sign-in and sign-out.
   // Sync view name to body for CSS theme scoping
   useEffect(() => {
     document.body.dataset.view = view
@@ -800,6 +813,9 @@ export function App(){
     if (view !== 'catalogue') setOrderDrawerOpen(false)
   }, [view])
 
+ if(!session) return <Login onSession={setSession} />
+ const commonViews:View[]=['catalogue','history','vendors','products','batch','taxonomy','storage']
+ const views=(session.role==='ADMIN'?[...commonViews,'devices']:commonViews) as View[]
   const logout=()=>{sessionStorage.removeItem(sessionKey);localStorage.removeItem(sessionKey);void storage.clearSession();setSession(null)}
   return <>
   <div className="brand-watermark-overlay" aria-hidden="true" />
@@ -891,7 +907,7 @@ export function App(){
             <div className="cart">
               {cart.map(p => (
                 <div className="cart-item" key={p.id}>
-                  <img src={p.gridImage} alt={p.designCode} />
+                  <ProductThumb product={p} />
                   <div className="cart-item-body">
                     <div className="cart-item-header">
                       <div><strong>{p.designCode}</strong><span>{grams(p.weightMg)} g</span></div>
@@ -975,7 +991,7 @@ export function App(){
     </header>
   <nav aria-label="Primary navigation">{views.map(item=><button key={item} className={view===item?'active':''} onClick={()=>setView(item)}>{item}</button>)}</nav>
   {notice&&<div className="notice" role="status">{notice}<button onClick={()=>setNotice('')} aria-label="Dismiss message">×</button></div>}
-  <main className="catalogue-layout" style={{display:view==='catalogue'?undefined:'none'}}><section className="catalogue"><div className="section-title"><div><p className="eyebrow">design library</p><h1>Find the right piece, without waiting.</h1></div><div style={{display:'flex',gap:'10px',alignItems:'center'}}><span>{filtered.length} designs</span><button type="button" className={`sales-demo-toggle-btn ${demoMode?'active':''}`} onClick={()=>setDemoMode(m=>!m)} title="Create high-resolution product demo PDF">✨ {demoMode?'Exit Demo Mode':'Sales Demo PDF'}</button></div></div><div className="filters"><label>Search design code<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="e.g. SJ-1001" /></label><label>Category<select value={category} onChange={e=>{setCategory(e.target.value);setSubcategory('')}}><option value="">All categories</option>{categories.map(c=><option value={c.id} key={c.id}>{c.name}</option>)}</select></label><label>Subcategory<select value={subcategory} onChange={e=>setSubcategory(e.target.value)}><option value="">All subcategories</option>{subcategories.filter(s=>!category||s.categoryId===category).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label><button className="quiet" onClick={clearFilters}>Clear filters</button></div>
+  <main className="catalogue-layout" style={{display:view==='catalogue'?undefined:'none'}}><section className="catalogue"><div className="section-title"><div><p className="eyebrow">design library</p><h1>Find the right piece, without waiting.</h1></div><div style={{display:'flex',gap:'10px',alignItems:'center'}}><ImageSyncBadge/><span>{filtered.length} designs</span><button type="button" className={`sales-demo-toggle-btn ${demoMode?'active':''}`} onClick={()=>setDemoMode(m=>!m)} title="Create high-resolution product demo PDF">✨ {demoMode?'Exit Demo Mode':'Sales Demo PDF'}</button></div></div><div className="filters"><label>Search design code<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="e.g. SJ-1001" /></label><label>Category<select value={category} onChange={e=>{setCategory(e.target.value);setSubcategory('')}}><option value="">All categories</option>{categories.map(c=><option value={c.id} key={c.id}>{c.name}</option>)}</select></label><label>Subcategory<select value={subcategory} onChange={e=>setSubcategory(e.target.value)}><option value="">All subcategories</option>{subcategories.filter(s=>!category||s.categoryId===category).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label><button className="quiet" onClick={clearFilters}>Clear filters</button></div>
   <div className="weight-filter-bar"><div className="weight-slider-group"><div className="weight-slider-header"><span>Weight Range Slider</span><span>{currentMinVal} g &mdash; {currentMaxVal} g</span></div><div className="dual-slider-track-box"><div className="dual-slider-rail" /><div className="dual-slider-fill" style={{left:`${leftPercent}%`,width:`${widthPercent}%`}} /><input aria-label="Minimum weight slider" className="dual-slider-thumb" type="range" min={0} max={maxPossibleWeight} step={1} value={currentMinVal} onPointerDown={()=>setSliderActive('min')} onChange={onSliderMinChange} style={{zIndex:sliderActive==='min'?5:(currentMinVal>maxPossibleWeight-5?5:3)}} /><input aria-label="Maximum weight slider" className="dual-slider-thumb" type="range" min={0} max={maxPossibleWeight} step={1} value={currentMaxVal} onPointerDown={()=>setSliderActive('max')} onChange={onSliderMaxChange} style={{zIndex:sliderActive==='max'?5:4}} /></div></div><div className="weight-presets" role="group" aria-label="Quick weight presets"><button type="button" className={`weight-preset-btn ${!minWeight&&!maxWeight?'active':''}`} onClick={()=>applyWeightPreset('','')}>All</button><button type="button" className={`weight-preset-btn ${minWeight===''&&maxWeight==='5'?'active':''}`} onClick={()=>applyWeightPreset('','5')}>&lt; 5g</button><button type="button" className={`weight-preset-btn ${minWeight==='5'&&maxWeight==='15'?'active':''}`} onClick={()=>applyWeightPreset('5','15')}>5&ndash;15g</button><button type="button" className={`weight-preset-btn ${minWeight==='15'&&maxWeight==='30'?'active':''}`} onClick={()=>applyWeightPreset('15','30')}>15&ndash;30g</button><button type="button" className={`weight-preset-btn ${minWeight==='30'&&maxWeight===''?'active':''}`} onClick={()=>applyWeightPreset('30','')}>30g+</button></div><div className="weight-inputs"><label>Min (g)<input type="number" step="0.001" min="0" placeholder="0.000" value={minWeight} onChange={e=>setMinWeight(e.target.value)} /></label><span>to</span><label>Max (g)<input type="number" step="0.001" min="0" placeholder="Max" value={maxWeight} onChange={e=>setMaxWeight(e.target.value)} /></label></div></div>
   {demoMode&&(
     <div className="sales-demo-bar" role="region" aria-label="Sales Demo PDF Toolbar">
@@ -1008,7 +1024,7 @@ export function App(){
       </div>
     </div>
   )}
-  <VirtualGrid products={filtered} scrollToId={detail?.id} resetKey={filterKey} renderCard={product=><article className={'product '+((selected[product.id]||demoSelected[product.id])?'chosen':'')} key={product.id}>{demoMode&&(<button type="button" className={`product-demo-badge ${demoSelected[product.id]?'selected':''}`} onClick={(e)=>{e.stopPropagation();toggleDemoItem(product.id)}} title={demoSelected[product.id]?'Remove from Sales Demo':'Include in Sales Demo'}>{demoSelected[product.id]?'✓ In Demo':'+ Add to Demo'}</button>)}<button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><img src={product.gridImage} alt={`${product.designCode} jewelry design`} decoding="async" /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div>{demoMode?(<button className={`select ${demoSelected[product.id]?'active-demo':''}`} aria-pressed={Boolean(demoSelected[product.id])} onClick={()=>toggleDemoItem(product.id)}>{demoSelected[product.id]?'✓ In Demo':'Select for Demo'}</button>):(<button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button>)}</div></article>} /></section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label>{vendorId&&(
+  <VirtualGrid products={filtered} scrollToId={detail?.id} resetKey={filterKey} onNearby={warmThumbs} renderCard={product=><article className={'product '+((selected[product.id]||demoSelected[product.id])?'chosen':'')} key={product.id}>{demoMode&&(<button type="button" className={`product-demo-badge ${demoSelected[product.id]?'selected':''}`} onClick={(e)=>{e.stopPropagation();toggleDemoItem(product.id)}} title={demoSelected[product.id]?'Remove from Sales Demo':'Include in Sales Demo'}>{demoSelected[product.id]?'✓ In Demo':'+ Add to Demo'}</button>)}<button className="image-button" onClick={()=>setDetail(product)} aria-label={`View ${product.designCode}`}><ProductThumb product={product} alt={`${product.designCode} jewelry design`} /></button><div className="product-meta"><div><strong>{product.designCode}</strong><span>{grams(product.weightMg)} g</span></div>{demoMode?(<button className={`select ${demoSelected[product.id]?'active-demo':''}`} aria-pressed={Boolean(demoSelected[product.id])} onClick={()=>toggleDemoItem(product.id)}>{demoSelected[product.id]?'✓ In Demo':'Select for Demo'}</button>):(<button className="select" aria-pressed={Boolean(selected[product.id])} onClick={()=>toggle(product.id)}>{selected[product.id]?'Selected':'Select'}</button>)}</div></article>} /></section><aside className="order-tray"><p className="eyebrow">manufacturer order</p><h2>{cart.length?`${cart.length} designs selected`:'Start with a vendor'}</h2><label>Vendor<select value={vendorId} onChange={e=>setVendorId(e.target.value)}><option value="">Choose vendor</option>{vendors.map(v=><option value={v.id} key={v.id}>{v.name} · {v.city}</option>)}</select></label>{vendorId&&(
 <div className="order-reps-section">
  <div className="order-reps-header">
   <span className="order-reps-title">Vendor Representative <span className="order-reps-subtitle">(Optional)</span></span>
@@ -1047,7 +1063,7 @@ export function App(){
   </div>
  ))}
 </div>
-)}<div className="line"/>{cart.length===0?<p className="muted">Select designs from the catalogue. Your work stays on this device when offline.</p>:<div className="cart">{cart.map(p=><div className="cart-item" key={p.id}><img src={p.gridImage} alt={p.designCode} /><div className="cart-item-body"><div className="cart-item-header"><div><strong>{p.designCode}</strong><span>{grams(p.weightMg)} g</span></div><button type="button" className="cart-item-remove-btn" onClick={()=>removeFromOrder(p.id)} aria-label={`Remove ${p.designCode} from order`} title={`Remove ${p.designCode} from order`}>✕</button></div><label>Qty<input aria-label={`Quantity for ${p.designCode}`} type="number" min="1" step="1" placeholder="1" value={selected[p.id].quantity} onChange={e=>change(p.id,'quantity',e.target.value)} /></label><input aria-label={`Remark for ${p.designCode}`} value={selected[p.id].remark} onChange={e=>change(p.id,'remark',e.target.value)} placeholder="Optional remark" /></div></div>)}</div>}<div className="total"><span>Total weight</span><strong>{grams(total)} g</strong></div><button className="primary" disabled={generatingPdf} onClick={()=>void makeOrder()}>{generatingPdf?'Generating PDF preview…':'Finalize & generate PDF'}</button><small>PDF is generated locally. Cloud sync follows when connected.</small></aside></main>
+)}<div className="line"/>{cart.length===0?<p className="muted">Select designs from the catalogue. Your work stays on this device when offline.</p>:<div className="cart">{cart.map(p=><div className="cart-item" key={p.id}><ProductThumb product={p} /><div className="cart-item-body"><div className="cart-item-header"><div><strong>{p.designCode}</strong><span>{grams(p.weightMg)} g</span></div><button type="button" className="cart-item-remove-btn" onClick={()=>removeFromOrder(p.id)} aria-label={`Remove ${p.designCode} from order`} title={`Remove ${p.designCode} from order`}>✕</button></div><label>Qty<input aria-label={`Quantity for ${p.designCode}`} type="number" min="1" step="1" placeholder="1" value={selected[p.id].quantity} onChange={e=>change(p.id,'quantity',e.target.value)} /></label><input aria-label={`Remark for ${p.designCode}`} value={selected[p.id].remark} onChange={e=>change(p.id,'remark',e.target.value)} placeholder="Optional remark" /></div></div>)}</div>}<div className="total"><span>Total weight</span><strong>{grams(total)} g</strong></div><button className="primary" disabled={generatingPdf} onClick={()=>void makeOrder()}>{generatingPdf?'Generating PDF preview…':'Finalize & generate PDF'}</button><small>PDF is generated locally. Cloud sync follows when connected.</small></aside></main>
   {view==='vendors'&&(
    <main className="single-view">
     <div className="section-title">
@@ -1256,16 +1272,16 @@ export function App(){
         style={{maxWidth:'360px'}}
        />
       </div>
+      {adminMatches.length>ADMIN_LIST_LIMIT&&<p className="muted" style={{margin:'0 0 var(--space-3)',fontSize:'13px'}}>Showing the {ADMIN_LIST_LIMIT} most recently changed of {adminMatches.length.toLocaleString('en-IN')} designs. Search by code to find any other design.</p>}
       <div className="admin-card-list">
-       {products
-        .filter(p=>!p.deleted&&(!adminSearch||p.designCode.toLowerCase().includes(adminSearch.toLowerCase().trim())))
+       {adminMatches.slice(-ADMIN_LIST_LIMIT).reverse()
         .map(p=>{
          const cat=categories.find(c=>c.id===p.categoryId)?.name||'Jewelry'
          const sub=subcategories.find(s=>s.id===p.subcategoryId)?.name
          return (
           <div key={p.id} className="admin-product-row">
            <div className="admin-product-row-left">
-            <img src={p.gridImage} alt={p.designCode}/>
+            <ProductThumb product={p}/>
             <div>
              <strong style={{fontSize:'15px'}}>{p.designCode}</strong>
              <span style={{fontSize:'13px',color:'var(--muted)',display:'block'}}>
@@ -1325,7 +1341,7 @@ export function App(){
           return (
            <div key={p.id} className="admin-product-row" style={{opacity:0.9}}>
             <div className="admin-product-row-left">
-             <img src={p.gridImage} alt={p.designCode}/>
+             <ProductThumb product={p}/>
              <div>
               <strong style={{fontSize:'15px'}}>{p.designCode}</strong>
               <span style={{fontSize:'13px',color:'var(--muted)',display:'block'}}>
@@ -1430,7 +1446,7 @@ export function App(){
     </div>
    </main>
   )}
-  {view==='storage'&&<main className="single-view storage"><div className="section-title"><div><p className="eyebrow">device replica</p><h1>Storage &amp; synchronization</h1></div><span>Checkpoint #{syncCheckpointVal}</span></div><div className="storage-card"><strong>{cloudBytes===null?'—':(cloudBytes/(1024*1024)).toFixed(2)+' MB'}</strong><span>Cloud R2 catalogue images</span><p>Calculated from the authenticated organization’s confirmed grid/detail image metadata. This is the cloud catalogue total, not a browser cache estimate.</p><strong>{(bytes/(1024*1024)).toFixed(2)} MB</strong><span>This device’s OPFS image replica</span><p>Images saved while working offline are counted here separately and remain on this device until explicitly cleared.</p><div style={{display:'flex',gap:'10px',alignItems:'center',padding:'8px 0'}}><span>Offline queue:</span><strong>{pendingCount} operation(s) pending sync</strong>{pendingCount>0&&<button className="quiet" style={{minHeight:'28px',padding:'0 8px',fontSize:'12px'}} onClick={async()=>{await storage.clearPendingOperations();await load();setNotice('Pending operations queue cleared.')}}>Clear queue</button>}</div><button className="primary" disabled={syncing||!online} onClick={()=>void triggerSync()}>{syncing?'Synchronizing…':'Run Full Synchronization'}</button><button className="quiet" disabled={recovering||!online} onClick={()=>void triggerImageRecovery()}>{recovering?'Recovering images…':'Scan & Recover Missing Images'}</button><button className="quiet" disabled={uploading||!online} onClick={()=>void uploadImages()}>{uploading?'Uploading pending images…':'Upload pending product images'}</button><button className="quiet" onClick={()=>{void load();void loadCloudStorage()}}>Refresh storage estimate</button><button className="quiet" style={{marginTop:'4px'}} onClick={async()=>{if('caches' in window){const k=await caches.keys();await Promise.all(k.map(n=>caches.delete(n)))};if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()))};window.location.reload()}}>Force Reload &amp; Update App</button><div style={{marginTop:'20px',paddingTop:'16px',borderTop:'1px dashed var(--danger,#983b32)'}}><strong style={{color:'var(--danger,#983b32)',fontSize:'13px',display:'block',marginBottom:'4px'}}>⚠️ Clean Handover Tool (Temporary)</strong><p style={{fontSize:'12px',color:'var(--muted)',margin:'0 0 10px'}}>Wipes all local test products, categories, vendors, and orders cached on this device so the client starts completely fresh. <strong>Your Admin login session is preserved.</strong></p><button type="button" className="quiet" style={{minHeight:'42px',width:'100%',color:'#fff',background:'var(--danger,#983b32)',borderColor:'var(--danger,#983b32)',fontWeight:700,fontSize:'13px',borderRadius:'8px'}} onClick={handleResetLocalData}>🗑️ Wipe Local Device Data (Keep Admin Logged In)</button></div></div></main>}
+  {view==='storage'&&<main className="single-view storage"><div className="section-title"><div><p className="eyebrow">device replica</p><h1>Storage &amp; synchronization</h1></div><span>Checkpoint #{syncCheckpointVal}</span></div><div className="storage-card"><strong>{cloudBytes===null?'—':(cloudBytes/(1024*1024)).toFixed(2)+' MB'}</strong><span>Cloud R2 catalogue images</span><p>Calculated from the authenticated organization’s confirmed grid/detail image metadata. This is the cloud catalogue total, not a browser cache estimate.</p><ImageSyncPanel/><div style={{display:'flex',gap:'10px',alignItems:'center',padding:'8px 0'}}><span>Offline queue:</span><strong>{pendingCount} operation(s) pending sync</strong>{pendingCount>0&&<button className="quiet" style={{minHeight:'28px',padding:'0 8px',fontSize:'12px'}} onClick={async()=>{if(!window.confirm(`⚠️ Clear the upload queue?\n\n${pendingCount} change(s) on this iPad have not reached the cloud yet. Clearing the queue means they will never be uploaded (designs stay on this iPad only).\n\nOnly do this if you are sure.`))return;await storage.clearPendingOperations();await load();setNotice('Pending operations queue cleared.')}}>Clear queue</button>}</div>{unsentDesigns>0&&<p className="unsent-note">{unsentDesigns} design(s) on this iPad are not in the cloud yet. They upload automatically whenever the iPad is online{heldBackList.length?` (except the ${heldBackList.length} kept below)`:''}.</p>}{heldBackList.length>0&&<div className="held-back"><strong>Kept on this iPad only — {heldBackList.length} design(s)</strong><p>The cloud already has a different design with the same code, so these were not uploaded (uploading would replace the cloud design). Nothing has been deleted; decide later what to do with each.</p><ul>{heldBackList.map(p=><li key={p.id}><ProductThumb product={p} alt={p.designCode}/><span><b>{p.designCode}</b>{p.heldBack?.at?` · held ${new Date(p.heldBack.at).toLocaleDateString()}`:''}</span></li>)}</ul></div>}<button className="primary" disabled={syncing||!online} onClick={()=>void triggerSync()}>{syncing?'Synchronizing…':'Run Full Synchronization'}</button><button className="quiet" disabled={recovering} onClick={()=>void triggerImageRecovery()}>{recovering?'Checking photos…':'Check & Repair Photos on This Device'}</button><button className="quiet" disabled={uploading||!online} onClick={()=>void uploadImages()}>{uploading?'Uploading pending images…':'Upload pending product images'}</button><button className="quiet" onClick={()=>{void load();void loadCloudStorage()}}>Refresh storage estimate</button><button className="quiet" style={{marginTop:'4px'}} onClick={async()=>{if('caches' in window){const k=await caches.keys();await Promise.all(k.map(n=>caches.delete(n)))};if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()))};window.location.reload()}}>Force Reload &amp; Update App</button><div style={{marginTop:'20px',paddingTop:'16px',borderTop:'1px dashed var(--danger,#983b32)'}}><strong style={{color:'var(--danger,#983b32)',fontSize:'13px',display:'block',marginBottom:'4px'}}>⚠️ Clean Handover Tool (Temporary)</strong><p style={{fontSize:'12px',color:'var(--muted)',margin:'0 0 10px'}}>Wipes all local test products, categories, vendors, and orders cached on this device so the client starts completely fresh. <strong>Your Admin login session is preserved.</strong></p><button type="button" className="quiet" style={{minHeight:'42px',width:'100%',color:'#fff',background:'var(--danger,#983b32)',borderColor:'var(--danger,#983b32)',fontWeight:700,fontSize:'13px',borderRadius:'8px'}} onClick={handleResetLocalData}>🗑️ Wipe Local Device Data (Keep Admin Logged In)</button></div></div></main>}
  {view==='devices'&&session.role==='ADMIN'&&(
   <main className="single-view">
    <div className="section-title">

@@ -5,6 +5,14 @@ export type RequestOptions = { method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'; tok
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? 'https://shine-jewels-api.aaditmehta45.workers.dev'
 
+/** A failed request to the cloud, with its HTTP status (0 when the network itself failed). */
+export class ApiError extends Error {
+  readonly status: number
+  constructor(message: string, status: number) { super(message); this.name = 'ApiError'; this.status = status }
+}
+/** The cloud no longer accepts this device's sign-in (revoked device, disabled user, or a session that ended). */
+export function isSignInError(error: unknown) { return error instanceof ApiError && error.status === 401 }
+
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
     method: options.method ?? 'GET',
@@ -12,7 +20,7 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
     body: options.body ? JSON.stringify(options.body) : undefined
   })
   const payload = await response.json().catch(() => ({ error: 'The server returned an invalid response.' })) as T & { error?: string }
-  if (!response.ok) throw new Error(payload.error ?? `Request failed with status ${response.status}.`)
+  if (!response.ok) throw new ApiError(payload.error ?? `Request failed with status ${response.status}.`, response.status)
   return payload
 }
 

@@ -1,4 +1,4 @@
-const CACHE = 'shine-jewels-v5';
+const CACHE = 'shine-jewels-v6';
 
 self.addEventListener('install', event => {
   event.waitUntil(

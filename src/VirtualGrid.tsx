@@ -36,9 +36,14 @@ type Props = {
   scrollToId?: string | null
   /** Changes here reset the scroll to the top of the grid (e.g. a new filter). */
   resetKey?: string
+  /** Called with the products just outside the rendered rows, so their photos can be read from disk before they scroll in. */
+  onNearby?: (products: Product[]) => void
 }
 
-export function VirtualGrid({ products, renderCard, scrollToId, resetKey }: Props) {
+/** Rows beyond the rendered window whose photos are read ahead of time. */
+export const READ_AHEAD_ROWS = 8
+
+export function VirtualGrid({ products, renderCard, scrollToId, resetKey, onNearby }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [layout, setLayout] = useState({ width: 0, top: 0, columns: 0, gap: GRID_GAP })
 
@@ -109,6 +114,13 @@ export function VirtualGrid({ products, renderCard, scrollToId, resetKey }: Prop
   }, [scrollToId, columns])
 
   const items = virtualizer.getVirtualItems()
+  const firstRow = items.length ? items[0].index : -1, lastRow = items.length ? items[items.length - 1].index : -1
+  useEffect(() => {
+    if (!onNearby || firstRow < 0 || columns === 0) return
+    const before = products.slice(Math.max(0, firstRow - READ_AHEAD_ROWS) * columns, firstRow * columns)
+    const after = products.slice((lastRow + 1) * columns, (lastRow + 1 + READ_AHEAD_ROWS) * columns)
+    if (before.length || after.length) onNearby([...after, ...before])
+  }, [firstRow, lastRow, columns, products, onNearby])
   return (
     <div ref={containerRef} className="grid virtual-grid" style={{ height: rowCount ? virtualizer.getTotalSize() : undefined }}>
       {items.map(item => {

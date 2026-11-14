@@ -2,8 +2,21 @@
 // in exactly the shape the app persists after a successful initialDownload (gridImage = local OPFS path).
 import { LocalSqlite } from '../src/local-sqlite'
 
-type SeedOptions = { count: number; cloudFraction: number; variants?: number }
-type SeedResult = { count: number; cloudProducts: number; gridBytesAvg: number; seedMs: number; sampleJpegBase64: string }
+type SeedOptions = {
+  count: number
+  /** Share of products whose photos are NOT on the device (must come from the cloud). */
+  cloudFraction: number
+  variants?: number
+  /** 'legacy' = photos stored the old way (base64 text files); 'none' = catalogue details only, as after a wipe. */
+  images?: 'legacy' | 'none'
+  /** Last N products exist only on this device (never uploaded), stored the old way. */
+  pending?: number
+  /** Pending designs have NO upload queue entry — what an older app left behind after erasing failed uploads. */
+  stranded?: boolean
+  /** Long side of the synthetic high-res photos. */
+  detailSide?: number
+}
+type SeedResult = { count: number; cloudProducts: number; gridBytesAvg: number; detailBytesAvg: number; seedMs: number; sampleJpegBase64: string; gridVariants: string[]; detailVariants: string[] }
 declare global { interface Window { seed: (o: SeedOptions) => Promise<SeedResult> } }
 
 const R2 = 'https://pub-ddd4389cc31a46b6b365e21911f96e1f.r2.dev'
@@ -31,7 +44,9 @@ async function jewelleryJpeg(seed: number, w: number, h: number, quality: number
   return c.convertToBlob({ type: 'image/jpeg', quality })
 }
 
-window.seed = async ({ count, cloudFraction, variants = 48 }) => {
+const sha256 = async (blob: Blob) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))].map(b => b.toString(16).padStart(2, '0')).join('')
+
+window.seed = async ({ count, cloudFraction, variants = 48, images = 'legacy', pending = 0, stranded = false, detailSide = 1400 }) => {
   const started = performance.now(), status = document.getElementById('status')!
   // Start from an empty device: Playwright WebKit can keep OPFS between profiles, so wipe it before the database opens.
   const root = await navigator.storage.getDirectory()
@@ -43,14 +58,20 @@ window.seed = async ({ count, cloudFraction, variants = 48 }) => {
   await db.setCheckpoint('storage_schema_version', '5')
   await db.setCheckpoint('sync_checkpoint', '1')
 
-  // Mix of landscape (short necklaces) and portrait (long necklaces) like the real catalogue.
-  const grids: string[] = []; let gridBytes = 0
+  // Mix of landscape (short necklaces) and portrait (long necklaces) like the real catalogue. Every variant has a
+  // 600px grid file and a high-res file with real checksums, so the app's integrity checks are exercised for real.
+  const grids: { data: string; checksum: string; size: number }[] = [], details: typeof grids = []
+  let gridBytes = 0, detailBytes = 0
+  const detailVariants = Math.min(variants, 6)
   for (let v = 0; v < variants; v++) {
     const blob = await jewelleryJpeg(1000 + v, v % 3 === 0 ? 340 : 600, v % 3 === 0 ? 600 : 470, 0.85)
-    gridBytes += blob.size; grids.push(await toDataUrl(blob))
+    gridBytes += blob.size; grids.push({ data: await toDataUrl(blob), checksum: await sha256(blob), size: blob.size })
   }
-  const tinyDetail = await toDataUrl(await jewelleryJpeg(7, 64, 64, 0.5))
-  const sampleJpegBase64 = grids[1].split(',')[1]
+  for (let v = 0; v < detailVariants; v++) {
+    const blob = await jewelleryJpeg(5000 + v, v % 3 === 0 ? Math.round(detailSide * 0.55) : detailSide, v % 3 === 0 ? detailSide : Math.round(detailSide * 0.8), 0.88)
+    detailBytes += blob.size; details.push({ data: await toDataUrl(blob), checksum: await sha256(blob), size: blob.size })
+  }
+  const sampleJpegBase64 = grids[1].data.split(',')[1]
 
   await db.execute('BEGIN')
   const cats = ['Necklace', 'Long Necklace', 'Bangles', 'Earrings']
@@ -58,22 +79,27 @@ window.seed = async ({ count, cloudFraction, variants = 48 }) => {
     await db.execute('INSERT OR REPLACE INTO local_entities(entity_type,id,payload) VALUES(?,?,?)', ['category', `cat-${c}`, JSON.stringify({ id: `cat-${c}`, name: cats[c], active: true })])
     for (let s = 0; s < 3; s++) await db.execute('INSERT OR REPLACE INTO local_entities(entity_type,id,payload) VALUES(?,?,?)', ['subcategory', `sub-${c}-${s}`, JSON.stringify({ id: `sub-${c}-${s}`, categoryId: `cat-${c}`, name: `${cats[c]} ${s + 1}`, active: true })])
   }
+  await db.execute('INSERT OR REPLACE INTO local_entities(entity_type,id,payload) VALUES(?,?,?)', ['vendor', 'vendor-1', JSON.stringify({ id: 'vendor-1', name: 'Bench Jewellers', address: '1 Test Road', city: 'Mumbai', type: 'WHOLESALE' })])
   let cloudProducts = 0
   for (let i = 0; i < count; i++) {
-    const id = `bench-${String(i).padStart(5, '0')}`, c = i % cats.length, cloud = rand() < cloudFraction
+    const id = `bench-${String(i).padStart(5, '0')}`, c = i % cats.length, isPending = i >= count - pending
+    const cloud = !isPending && (images === 'none' || rand() < cloudFraction)
+    const grid = grids[i % variants], detail = details[i % detailVariants]
     const gridKey = `bench/products/${id}/v1/grid`, detailKey = `bench/products/${id}/v1/detail`
     if (cloud) cloudProducts++
-    else await db.putImage(`${id}-grid-v1`, grids[i % variants])
-    await db.putImage(`${id}-detail-v1`, tinyDetail) // "already downloaded" so sync's offline-detail loop sees it as cached
-    const product = {
-      id, designCode: `SW ${i + 1}`, categoryId: `cat-${c}`, subcategoryId: `sub-${c}-${i % 3}`, weightMg: 5000 + Math.round(rand() * 55000),
-      gridImage: cloud ? `${R2}/${gridKey}` : `${id}-grid-v1`, detailImage: `${id}-detail-v1`, imageVersion: 1, syncState: 'SYNCED', deleted: false,
-      gridImageKey: gridKey, detailImageKey: detailKey, gridImageSizeBytes: 60000, detailImageSizeBytes: 400000
-    }
+    else { await db.putImage(`${id}-grid-v1`, grid.data); await db.putImage(`${id}-detail-v1`, detail.data) }
+    const base = { id, designCode: `SW ${i + 1}`, categoryId: `cat-${c}`, subcategoryId: `sub-${c}-${i % 3}`, weightMg: 5000 + Math.round(rand() * 55000), imageVersion: 1, deleted: false }
+    const product = isPending
+      // Exactly what the old app stored for a design that was saved but never uploaded.
+      ? { ...base, gridImage: `${id}-grid-v1`, detailImage: `${id}-detail-v1`, syncState: 'PENDING_UPLOAD' }
+      : { ...base, gridImage: cloud ? `${R2}/${gridKey}` : `${id}-grid-v1`, detailImage: cloud ? `${R2}/${detailKey}` : `${id}-detail-v1`, syncState: 'SYNCED',
+          gridImageKey: gridKey, detailImageKey: detailKey, gridImageChecksum: grid.checksum, detailImageChecksum: detail.checksum, gridImageSizeBytes: grid.size, detailImageSizeBytes: detail.size }
     await db.execute('INSERT OR REPLACE INTO local_entities(entity_type,id,payload) VALUES(?,?,?)', ['product', id, JSON.stringify(product)])
-    if (i % 500 === 0) status.textContent = `Seeding ${i}/${count}`
+    if (isPending && !stranded) await db.queueOperation('product', 'UPSERT', { id })
+    if (i % 100 === 0) status.textContent = `Seeding ${i}/${count}`
   }
   await db.execute('COMMIT')
   status.textContent = 'done'
-  return { count, cloudProducts, gridBytesAvg: Math.round(gridBytes / variants), seedMs: Math.round(performance.now() - started), sampleJpegBase64 }
+  return { count, cloudProducts, gridBytesAvg: Math.round(gridBytes / variants), detailBytesAvg: Math.round(detailBytes / detailVariants), seedMs: Math.round(performance.now() - started), sampleJpegBase64,
+    gridVariants: grids.map(g => g.data.split(',')[1]), detailVariants: details.map(d => d.data.split(',')[1]) }
 }

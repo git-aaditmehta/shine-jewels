@@ -1,5 +1,6 @@
 import type { Category, Order, Product, Subcategory, Vendor } from './types'
 import { storage } from './storage'
+import { imageStore } from './image-store'
 import { jsPDF } from 'jspdf'
 
 const grams = (mg: number) => (mg / 1000).toFixed(3)
@@ -102,38 +103,14 @@ async function resolveItemThumbnail(
   let gridSource: string | null = null
 
   if (prod) {
-    if (prod.gridImage && prod.gridImage.startsWith('data:')) {
-      gridSource = prod.gridImage
-    } else {
-      // Look up OPFS grid cache
-      const keysToTry = [
-        `${prod.id}-grid-v${prod.imageVersion || 1}`,
-        prod.gridImageKey,
-        prod.gridImage,
-      ]
-      for (const key of keysToTry) {
-        if (key && !key.startsWith('http://') && !key.startsWith('https://') && !key.startsWith('data:')) {
-          const cached = await storage.getImage(key)
-          if (cached) {
-            gridSource = cached
-            break
-          }
-        }
-      }
-      if (!gridSource && prod.gridImage) {
-        gridSource = prod.gridImage
-      }
-    }
+    // The thumbnail stored on this device. If it has not been downloaded yet and we are online, fetch it now.
+    gridSource = await imageStore.dataUrl(prod, 'thumb')
+    if (!gridSource && await imageStore.ensure(prod, ['thumb'])) gridSource = await imageStore.dataUrl(prod, 'thumb')
   }
 
-  // Fallback to order item's snapshot image (which is gridImage saved when order was created)
-  if (!gridSource && item.image) {
-    if (item.image.startsWith('data:') || item.image.startsWith('http://') || item.image.startsWith('https://')) {
-      gridSource = item.image
-    } else {
-      const cached = await storage.getImage(item.image)
-      if (cached) gridSource = cached
-    }
+  // Orders saved by older app versions carried their own copy of the picture.
+  if (!gridSource && item.image && (item.image.startsWith('data:') || item.image.startsWith('http://') || item.image.startsWith('https://'))) {
+    gridSource = item.image
   }
 
   if (!gridSource) return null
@@ -684,78 +661,11 @@ export async function createBothOrderPdfs(rawOrder: Order): Promise<OrderPdfsRes
 
 async function resolveHighResImageForDemo(product: Product): Promise<{ dataUrl: string; width: number; height: number; format: 'PNG' | 'JPEG' } | null> {
   try {
-    let source: string | null = null
-
-    // 1. Direct local OPFS / memory cache lookup for high-resolution detail image
-    const detailKeys = [
-      `${product.id}-detail-v${product.imageVersion || 1}`,
-      product.detailImageKey,
-      product.detailImage,
-    ]
-    for (const key of detailKeys) {
-      if (key && !key.startsWith('http://') && !key.startsWith('https://')) {
-        if (key.startsWith('data:')) {
-          source = key
-          break
-        }
-        const cached = await storage.getImage(key).catch(() => null)
-        if (cached) {
-          source = cached
-          break
-        }
-      }
-    }
-
-    // 2. Try storage.resolveDetailImage
-    if (!source) {
-      const resolved = await storage.resolveDetailImage(product).catch(() => '')
-      if (resolved) {
-        if (resolved.startsWith('data:')) {
-          source = resolved
-        } else if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
-          // If online, fetch or check if already cached
-          const fetched = await urlToDataUrl(resolved).catch(() => null)
-          if (fetched) {
-            source = fetched
-            // Cache locally so all future generations are 100% offline
-            void storage.saveImageData(`${product.id}-detail-v${product.imageVersion || 1}`, fetched).catch(() => {})
-          }
-        } else {
-          const cached = await storage.getImage(resolved).catch(() => null)
-          if (cached) source = cached
-        }
-      }
-    }
-
-    // 3. Offline fallback to locally cached gridImage if detail image is not yet cached
-    if (!source) {
-      const gridKeys = [
-        `${product.id}-grid-v${product.imageVersion || 1}`,
-        product.gridImageKey,
-        product.gridImage,
-      ]
-      for (const key of gridKeys) {
-        if (key && !key.startsWith('http://') && !key.startsWith('https://')) {
-          if (key.startsWith('data:')) {
-            source = key
-            break
-          }
-          const cached = await storage.getImage(key).catch(() => null)
-          if (cached) {
-            source = cached
-            break
-          }
-        }
-      }
-      if (!source && product.gridImage) {
-        if (product.gridImage.startsWith('data:')) {
-          source = product.gridImage
-        } else if (product.gridImage.startsWith('http://') || product.gridImage.startsWith('https://')) {
-          const fetched = await urlToDataUrl(product.gridImage).catch(() => null)
-          if (fetched) source = fetched
-        }
-      }
-    }
+    // High-res from this device; if it is not downloaded yet, fetch it now (online) — otherwise use the thumbnail.
+    let source = await imageStore.dataUrl(product, 'detail')
+    if (!source && await imageStore.ensure(product, ['detail'])) source = await imageStore.dataUrl(product, 'detail')
+    if (!source) source = await imageStore.dataUrl(product, 'thumb')
+    if (!source && await imageStore.ensure(product, ['thumb'])) source = await imageStore.dataUrl(product, 'thumb')
 
     if (!source) return null
 

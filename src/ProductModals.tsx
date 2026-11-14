@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { MAX_IMAGE_SIZE_BYTES, processDualImages } from './Management'
 import type { Category, Product, Subcategory } from './types'
+import { ProductPhoto, ProductThumb } from './StoredImage'
 
 const validWeight = (s: string) => /^\d+(\.\d{1,3})?$/.test(s) && Number(s) > 0
 const grams = (mg: number) => (mg / 1000).toFixed(3)
@@ -195,11 +196,9 @@ export function EditProductModal({
             <div className="product-modal-col">
               <label>Current Design Photo (v{product.imageVersion || 1})</label>
               <div className="edit-current-image-box">
-                <img
-                  src={replacementPreview || product.detailImage || product.gridImage}
-                  alt={product.designCode}
-                  className="edit-image-preview"
-                />
+                {replacementPreview
+                  ? <img src={replacementPreview} alt={product.designCode} className="edit-image-preview" />
+                  : <ProductPhoto product={product} className="edit-image-preview" />}
                 {replacementPreview && (
                   <span className="replacement-badge">New Photo Selected (v{(product.imageVersion || 1) + 1})</span>
                 )}
@@ -286,7 +285,7 @@ export function DeleteConfirmModal({
 
         <div className="archive-modal-body">
           <div className="archive-product-preview">
-            <img src={product.gridImage} alt={product.designCode} />
+            <ProductThumb product={product} />
             <div>
               <strong>{product.designCode}</strong>
               <span>{(product.weightMg / 1000).toFixed(3)} g</span>

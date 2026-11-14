@@ -1,6 +1,8 @@
 
-import { workerApi } from './api'
+import { isSignInError, workerApi } from './api'
 import { storage } from './storage'
+import { imageStore, sha256Hex } from './image-store'
+import { cloudImageUrl } from './image-names'
 import type { Category, Order, Product, Subcategory, Vendor } from './types'
 
 type Change = { sequence_number: number; entity_type: string; entity_id: string; operation: string; payload: string }
@@ -69,7 +71,6 @@ export const productFromRecord = (x: Record<string, unknown>): Product => {
 const category = (x: Record<string, unknown>) => ({ id: String(x.id), name: String(x.name), active: !x.deleted_at && Boolean(x.is_active ?? true) })
 const subcategory = (x: Record<string, unknown>) => ({ id: String(x.id), categoryId: String(x.category_id || x.categoryId), name: String(x.name), active: !x.deleted_at && Boolean(x.is_active ?? true) })
 const vendor = (x: Record<string, unknown>) => ({ id: String(x.id), name: String(x.name), address: String(x.address), city: String(x.city), type: String(x.type) as any, deleted: Boolean(x.deleted_at || x.deleted) })
-const same = (a: string, b: string) => a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase()
 
 export async function computeSha256(data: string | ArrayBuffer): Promise<string> {
   const bytes = typeof data === 'string' ? await (await fetch(data)).arrayBuffer() : data
@@ -77,45 +78,14 @@ export async function computeSha256(data: string | ArrayBuffer): Promise<string>
   return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-export async function sourceToBlobAndChecksum(source: string): Promise<{ blob: Blob; checksum: string; contentType: string }> {
-  if (!source) throw new Error('Image source is empty.')
-  if (source.startsWith('data:')) {
-    const parts = source.split(',')
-    const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/jpeg'
-    const binary = atob(parts[1] || '')
-    const len = binary.length
-    const u8arr = new Uint8Array(len)
-    for (let i = 0; i < len; i++) {
-      u8arr[i] = binary.charCodeAt(i)
-    }
-    const checksum = await computeSha256(u8arr.buffer)
-    const blob = new Blob([u8arr], { type: mime })
-    return { blob, checksum, contentType: mime }
-  }
-  if (!source.startsWith('http://') && !source.startsWith('https://')) {
-    const localData = await storage.getImage(source)
-    if (localData && localData.startsWith('data:')) {
-      return sourceToBlobAndChecksum(localData)
-    }
-    throw new Error(`Cannot load image from non-URL source: ${source}`)
-  }
-  const res = await fetch(source)
-  if (!res.ok) throw new Error(`Could not load image resource (${res.status}).`)
-  const contentType = res.headers.get('content-type') || ''
-  if (contentType.includes('text/html')) {
-    throw new Error('Received HTML document instead of image.')
-  }
-  const blob = await res.blob()
-  if (blob.size < 500 && contentType.includes('html')) {
-    throw new Error('Received invalid HTML response for image.')
-  }
-  const buffer = await blob.arrayBuffer()
-  const checksum = await computeSha256(buffer)
-  return { blob, checksum, contentType: blob.type || contentType || 'image/jpeg' }
+type UploadSource = { blob: Blob; checksum: string; contentType: string }
+
+async function uploadSource(blob: Blob): Promise<UploadSource> {
+  return { blob, checksum: await sha256Hex(new Uint8Array(await blob.arrayBuffer())), contentType: blob.type || 'image/jpeg' }
 }
 
-async function directUpload(token: string, productId: string, representation: 'grid' | 'detail', source: string, version: number, precomputed?: { blob: Blob; checksum: string; contentType: string }) {
-  const { blob, checksum, contentType } = precomputed || await sourceToBlobAndChecksum(source)
+async function directUpload(token: string, productId: string, representation: 'grid' | 'detail', version: number, source: UploadSource) {
+  const { blob, checksum, contentType } = source
   const grant = await workerApi<{ key: string; headers: Record<string, string>; url: string; sizeBytes: number; checksum: string }>('/images/upload-authorizations', {
     method: 'POST',
     token,
@@ -127,66 +97,76 @@ async function directUpload(token: string, productId: string, representation: 'g
   return { key: grant.key, sizeBytes: grant.sizeBytes, checksum: grant.checksum }
 }
 
+// Cloud ids of categories/subcategories confirmed in the last few minutes, so a batch of uploads asks once, not per product.
+const taxonomyIds = new Map<string, { id: string; at: number }>()
+async function cloudTaxonomyId(cacheKey: string, ask: () => Promise<Record<string, unknown>>): Promise<string> {
+  const known = taxonomyIds.get(cacheKey)
+  if (known && Date.now() - known.at < 5 * 60_000) return known.id
+  const remote = await ask()
+  if (!remote?.id) throw new Error('The cloud did not confirm the category for this design.')
+  const id = String(remote.id)
+  taxonomyIds.set(cacheKey, { id, at: Date.now() })
+  return id
+}
+
+/** A design kept on this device instead of being uploaded, because a different cloud design already uses its code. */
+export class HeldBackError extends Error {
+  readonly cloudId: string
+  constructor(designCode: string, cloudId: string) { super(`Design ${designCode} was kept on this device: a different design with this code is already in the cloud.`); this.name = 'HeldBackError'; this.cloudId = cloudId }
+}
+
 export async function uploadProductOnline(token: string, productId: string): Promise<Product & { id: string }> {
-  const initialItem = (await storage.products()).find(x => x.id === productId)
+  const initialItem = await storage.productRecord(productId)
   if (!initialItem) throw new Error('Product not found locally.')
+
+  // The cloud matches designs by id or by design code. If a *different* cloud design already has this code, uploading
+  // would overwrite that design's photos and weight, so the design is held back on this device for a decision instead.
+  // Checked before any photo is sent, so nothing is uploaded for a held-back design.
+  const clash = await workerApi<{ product: { id: string; designCode: string } | null }>(`/products/by-code?code=${encodeURIComponent(initialItem.designCode.trim())}`, { token })
+  if (clash.product && clash.product.id !== initialItem.id) {
+    await storage.holdBackProduct(initialItem.id, clash.product.id)
+    throw new HeldBackError(initialItem.designCode, clash.product.id)
+  }
   const categories = await storage.categories(), subcategories = await storage.subcategories()
   const localCategory = categories.find(x => x.id === initialItem.categoryId)
   const localSubcategory = subcategories.find(x => x.id === initialItem.subcategoryId)
   if (!localCategory || !localSubcategory) throw new Error('Product category or subcategory is missing locally.')
 
-  const bootstrap = await workerApi<Bootstrap>('/sync/bootstrap', { token })
-  let remoteCategory = bootstrap.categories.find(x => !x.deleted_at && same(String(x.name), localCategory.name))
-  if (!remoteCategory) remoteCategory = await workerApi<Record<string, unknown>>('/categories', { method: 'POST', token, body: { id: localCategory.id, name: localCategory.name } })
-  await storage.remapCategoryId(localCategory.id, String(remoteCategory.id))
+  // The server's "create category" call returns the existing one when the id or name already exists, so it is used to
+  // look the cloud id up. (This used to download the entire catalogue for every single product upload.)
+  const remoteCategoryId = await cloudTaxonomyId(`c:${localCategory.id}:${localCategory.name}`, () => workerApi<Record<string, unknown>>('/categories', { method: 'POST', token, body: { id: localCategory.id, name: localCategory.name } }))
+  await storage.remapCategoryId(localCategory.id, remoteCategoryId)
 
-  const remappedItem = (await storage.products()).find(x => x.id === productId)
+  const remappedItem = await storage.productRecord(productId)
   if (!remappedItem) throw new Error('Product lost during category remap.')
   const targetCategoryId = remappedItem.categoryId
-  let remoteSubcategory = bootstrap.subcategories.find(x => !x.deleted_at && String(x.category_id) === targetCategoryId && same(String(x.name), localSubcategory.name))
-  if (!remoteSubcategory) remoteSubcategory = await workerApi<Record<string, unknown>>('/subcategories', { method: 'POST', token, body: { id: localSubcategory.id, name: localSubcategory.name, categoryId: targetCategoryId } })
-  await storage.remapSubcategoryId(localSubcategory.id, String(remoteSubcategory.id))
+  const remoteSubcategoryId = await cloudTaxonomyId(`s:${localSubcategory.id}:${targetCategoryId}:${localSubcategory.name}`, () => workerApi<Record<string, unknown>>('/subcategories', { method: 'POST', token, body: { id: localSubcategory.id, name: localSubcategory.name, categoryId: targetCategoryId } }))
+  await storage.remapSubcategoryId(localSubcategory.id, remoteSubcategoryId)
 
-  const finalItem = (await storage.products()).find(x => x.id === productId) || (await storage.archivedProducts()).find(x => x.id === productId)
+  const finalItem = await storage.productRecord(productId)
   if (!finalItem) throw new Error('Product lost during subcategory remap.')
 
   let gridImage = { key: finalItem.gridImageKey || '', sizeBytes: finalItem.gridImageSizeBytes || 0, checksum: finalItem.gridImageChecksum || '' }
   let detailImage = { key: finalItem.detailImageKey || '', sizeBytes: finalItem.detailImageSizeBytes || 0, checksum: finalItem.detailImageChecksum || '' }
 
-  // Resolve actual image data if local OPFS path
-  let gridSource = finalItem.gridImage
-  if (!gridSource.startsWith('data:') && !gridSource.startsWith('http://') && !gridSource.startsWith('https://')) {
-    gridSource = (await storage.getImage(gridSource)) || ''
-  }
-  let detailSource = finalItem.detailImage
-  if (!detailSource.startsWith('data:') && !detailSource.startsWith('http://') && !detailSource.startsWith('https://')) {
-    detailSource = (await storage.getImage(detailSource)) || ''
-  }
-  // If detail image could not be resolved, fall back to gridSource
-  if (!detailSource) {
-    detailSource = gridSource
-  }
-  if (!gridSource) {
-    gridSource = detailSource
-  }
-
-  const needsGridUpload = gridSource.startsWith('data:') || !finalItem.gridImageKey
-  const needsDetailUpload = detailSource.startsWith('data:') || !finalItem.detailImageKey || (finalItem.detailImageSizeBytes !== undefined && finalItem.detailImageSizeBytes < 1000)
+  // Photos that have never reached the cloud live only in this device's image store.
+  const needsGridUpload = !finalItem.gridImageKey
+  const needsDetailUpload = !finalItem.detailImageKey || (finalItem.detailImageSizeBytes !== undefined && finalItem.detailImageSizeBytes > 0 && finalItem.detailImageSizeBytes < 1000)
 
   if (needsGridUpload || needsDetailUpload) {
-    let gridPre: { blob: Blob; checksum: string; contentType: string } | undefined
-    let detailPre: { blob: Blob; checksum: string; contentType: string } | undefined
-    if (gridSource === detailSource && gridSource) {
-      const shared = await sourceToBlobAndChecksum(gridSource)
-      gridPre = shared
-      detailPre = shared
-    }
-    if (needsGridUpload && gridSource) {
-      gridImage = await directUpload(token, finalItem.id, 'grid', gridSource, finalItem.imageVersion, gridPre)
-    }
-    if (needsDetailUpload && detailSource) {
-      detailImage = await directUpload(token, finalItem.id, 'detail', detailSource, finalItem.imageVersion, detailPre)
-    }
+    // Makes sure photos saved by an older app version have been moved into the image store first.
+    await imageStore.ensure(finalItem, ['grid', 'thumb', 'detail'])
+    let gridBlob = await imageStore.blob(finalItem, 'grid')
+    let detailBlob = await imageStore.blob(finalItem, 'detail')
+    // Already-uploaded picture that is not on this device (e.g. repairing a damaged cloud copy): take it from the cloud.
+    const fromCloud = async (key?: string) => { if (!key) return null; try { const r = await fetch(cloudImageUrl(key)); return r.ok ? await r.blob() : null } catch { return null } }
+    if (!gridBlob) gridBlob = await fromCloud(finalItem.gridImageKey)
+    if (!detailBlob) detailBlob = gridBlob
+    if (!gridBlob) gridBlob = detailBlob
+    if (!gridBlob || !detailBlob) throw new Error(`The photo for ${finalItem.designCode} is missing on this device. Open the design and choose the photo again.`)
+    const gridSource = await uploadSource(gridBlob), detailSource = detailBlob === gridBlob ? gridSource : await uploadSource(detailBlob)
+    if (needsGridUpload) gridImage = await directUpload(token, finalItem.id, 'grid', finalItem.imageVersion, gridSource)
+    if (needsDetailUpload) detailImage = await directUpload(token, finalItem.id, 'detail', finalItem.imageVersion, detailSource)
   }
   const res = await workerApi<Product & { id: string }>('/products', {
     method: 'POST',
@@ -196,6 +176,8 @@ export async function uploadProductOnline(token: string, productId: string): Pro
   const savedProd: Product = {
     ...finalItem,
     id: res.id || finalItem.id,
+    gridImage: '',
+    detailImage: '',
     syncState: 'SYNCED',
     gridImageKey: gridImage.key,
     detailImageKey: detailImage.key,
@@ -204,6 +186,8 @@ export async function uploadProductOnline(token: string, productId: string): Pro
     gridImageSizeBytes: gridImage.sizeBytes,
     detailImageSizeBytes: detailImage.sizeBytes
   }
+  // The files already on this device stay valid; rename them if the id or checksums changed with the upload.
+  await imageStore.adopt(finalItem, savedProd)
   if (res.id && res.id !== finalItem.id) {
     await storage.remapProductId(finalItem.id, res.id, savedProd)
   } else {
@@ -306,166 +290,110 @@ export async function uploadPendingProductImages(token: string) {
 }
 
 export async function initialDownload(token: string, onProgress?: (msg: string) => void) {
-  onProgress?.('Downloading catalogue metadata...')
+  onProgress?.('Downloading catalogue…')
   const data = await workerApi<Bootstrap>('/sync/bootstrap', { token })
 
-  for (const x of data.categories) await storage.applyRemoteChange({ entityType: 'category', entityId: String(x.id), operation: x.deleted_at ? 'ARCHIVE' : 'CREATE', payload: category(x) })
-  for (const x of data.subcategories) await storage.applyRemoteChange({ entityType: 'subcategory', entityId: String(x.id), operation: x.deleted_at ? 'ARCHIVE' : 'CREATE', payload: subcategory(x) })
-  for (const x of data.vendors) await storage.applyRemoteChange({ entityType: 'vendor', entityId: String(x.id), operation: x.deleted_at ? 'ARCHIVE' : 'CREATE', payload: vendor(x) })
-  for (const x of data.presentations) await storage.applyRemoteChange({ entityType: 'presentation', entityId: String(x.id), operation: 'FINALIZE', payload: x })
-
-  const activeProducts = data.products.filter(p => !p.deleted_at)
-  let count = 0
-
-  for (const x of data.products) {
-    const p = productFromRecord(x)
-    await storage.applyRemoteChange({ entityType: 'product', entityId: String(x.id), operation: x.deleted_at ? 'ARCHIVE' : 'CREATE', payload: p })
+  // Catalogue details only. Photos are not downloaded here: the background downloader fetches thumbnails first and
+  // high-res afterwards, so the catalogue opens straight away and an interrupted download simply continues later.
+  const CHUNK = 500
+  const apply = async <T,>(items: T[], save: (item: T) => Promise<void>) => {
+    for (let i = 0; i < items.length; i += CHUNK) await storage.bulk(async () => { for (const item of items.slice(i, i + CHUNK)) await save(item) })
   }
-
-  // Pre-cache both grid thumbnails and high-res detail images into local OPFS with SHA-256 verification
-  for (const x of activeProducts) {
-    count++
-    const p = productFromRecord(x)
-    if (p.gridImageKey) {
-      const gridLocalPath = `${p.id}-grid-v${p.imageVersion}`
-      const exists = await storage.hasImage(gridLocalPath)
-      if (!exists) {
-        onProgress?.(`Caching thumbnails (${count}/${activeProducts.length}): ${p.designCode}`)
-        try {
-          await storage.cacheRemoteImage(p.id, 'grid', p.gridImage, p.imageVersion, p.gridImageChecksum, p.gridImageSizeBytes)
-        } catch (e) {
-          console.warn(`Grid pre-cache failed for ${p.designCode}:`, e)
-        }
-      }
-    }
-    if (p.detailImageKey) {
-      const detailLocalPath = `${p.id}-detail-v${p.imageVersion}`
-      const exists = await storage.hasImage(detailLocalPath)
-      if (!exists) {
-        onProgress?.(`Caching high-res offline details (${count}/${activeProducts.length}): ${p.designCode}`)
-        try {
-          await storage.cacheRemoteImage(p.id, 'detail', p.detailImage, p.imageVersion, p.detailImageChecksum, p.detailImageSizeBytes)
-        } catch (e) {
-          console.warn(`Detail pre-cache failed for ${p.designCode}:`, e)
-        }
-      }
-    }
-  }
+  await apply(data.categories, x => storage.applyRemoteChange({ entityType: 'category', entityId: String(x.id), operation: x.deleted_at ? 'ARCHIVE' : 'CREATE', payload: category(x) }))
+  await apply(data.subcategories, x => storage.applyRemoteChange({ entityType: 'subcategory', entityId: String(x.id), operation: x.deleted_at ? 'ARCHIVE' : 'CREATE', payload: subcategory(x) }))
+  await apply(data.vendors, x => storage.applyRemoteChange({ entityType: 'vendor', entityId: String(x.id), operation: x.deleted_at ? 'ARCHIVE' : 'CREATE', payload: vendor(x) }))
+  await apply(data.presentations, x => storage.applyRemoteChange({ entityType: 'presentation', entityId: String(x.id), operation: 'FINALIZE', payload: x }))
+  await apply(data.products, x => storage.applyRemoteChange({ entityType: 'product', entityId: String(x.id), operation: x.deleted_at ? 'ARCHIVE' : 'CREATE', payload: productFromRecord(x) }))
 
   await storage.setSyncCheckpoint(data.checkpoint)
-  onProgress?.('Initial catalogue synchronization complete.')
+  onProgress?.('Catalogue ready. Photos continue downloading in the background.')
 }
 
-export async function cloudImageStorageBytes(token: string) {
-  const data = await workerApi<Bootstrap>('/sync/bootstrap', { token })
-  return data.products.filter(product => !product.deleted_at).reduce((total, product) => total + Number(product.grid_image_size_bytes || 0) + Number(product.detail_image_size_bytes || 0), 0)
+/** Size of the catalogue's photos in the cloud, from the product details already synced to this device. */
+export function cloudImageStorageBytes(products: Product[]) {
+  return products.filter(product => !product.deleted && product.gridImageKey).reduce((total, product) => total + Number(product.gridImageSizeBytes || 0) + Number(product.detailImageSizeBytes || 0), 0)
 }
 
 export async function synchronize(token: string, onProgress?: (msg: string) => void) {
   if (!navigator.onLine) return { synced: false, reason: 'offline' }
 
   // 1. Push offline queued operations
+  // The queue is read 100 at a time; keep going until everything waiting has been tried once in this sync (a device that
+  // was offline or signed out for weeks can have hundreds of designs waiting).
   onProgress?.('Uploading queued offline modifications...')
-  const pending = await storage.pendingOperations()
-  let uploaded = 0, failed = 0
-  for (const operation of pending) {
-    try {
-      const res = await push(token, operation)
-      await storage.completeOperation(operation.id)
-      if (res) uploaded++
-    } catch (error) {
-      await storage.completeOperation(operation.id, error instanceof Error ? error.message : 'Sync failed')
-      failed++
+  let uploaded = 0, failed = 0, heldBack = 0
+  const tried = new Set<string>()
+  for (let round = 0; round < 200; round++) {
+    const pending = (await storage.pendingOperations()).filter(operation => !tried.has(operation.id))
+    if (!pending.length) break
+    for (const operation of pending) {
+      tried.add(operation.id)
+      try {
+        const res = await push(token, operation)
+        await storage.completeOperation(operation.id)
+        if (res) uploaded++
+      } catch (error) {
+        // Signed out: stop here and leave the queue exactly as it is. A rejected sign-in is not the upload's fault, so it
+        // must not use up the operation's retries.
+        if (isSignInError(error)) throw error
+        if (error instanceof HeldBackError) { await storage.completeOperation(operation.id); heldBack++; continue }
+        await storage.completeOperation(operation.id, error instanceof Error ? error.message : 'Sync failed')
+        failed++
+      }
+      if ((uploaded + failed + heldBack) % 5 === 0) onProgress?.(`Uploading saved changes… ${uploaded} uploaded${failed ? `, ${failed} will retry` : ''}${heldBack ? `, ${heldBack} kept on device` : ''}`)
     }
   }
 
   // 2. Pull incremental updates from change feed
   onProgress?.('Checking cloud change feed...')
-  const after = await storage.syncCheckpoint()
-  const changes = await workerApi<Change[]>(`/sync/changes?after=${after}`, { token })
-
-  for (const change of changes) {
-    if (change.operation === 'ARCHIVE' || change.operation === 'DELETE') {
-      await storage.applyRemoteChange({
-        entityType: change.entity_type,
-        entityId: change.entity_id,
-        operation: 'DELETE',
-        payload: { id: change.entity_id }
-      })
-    } else {
-      const parsed = JSON.parse(change.payload) as Record<string, unknown>
-      if (change.entity_type === 'product') {
-        const p = productFromRecord(parsed)
-        await storage.applyRemoteChange({
-          entityType: 'product',
-          entityId: change.entity_id,
-          operation: change.operation,
-          payload: p
-        })
-        if (p.gridImageKey) {
-          const gridLocalPath = `${p.id}-grid-v${p.imageVersion}`
-          if (!(await storage.hasImage(gridLocalPath))) {
-            try {
-              await storage.cacheRemoteImage(p.id, 'grid', p.gridImage, p.imageVersion, p.gridImageChecksum, p.gridImageSizeBytes)
-            } catch (err) {
-              console.warn(`Incremental image cache failed for ${p.designCode}:`, err)
-            }
+  // The server returns at most 500 changes per call: keep asking until this device has caught up.
+  let pulled = 0
+  for (let page = 0; page < 200; page++) {
+    const after = await storage.syncCheckpoint()
+    const changes = await workerApi<Change[]>(`/sync/changes?after=${after}`, { token })
+    pulled += changes.length
+    await storage.bulk(async () => {
+      for (const change of changes) {
+        if (change.operation === 'ARCHIVE' || change.operation === 'DELETE') {
+          await storage.applyRemoteChange({
+            entityType: change.entity_type,
+            entityId: change.entity_id,
+            operation: 'DELETE',
+            payload: { id: change.entity_id }
+          })
+        } else {
+          const parsed = JSON.parse(change.payload) as Record<string, unknown>
+          if (change.entity_type === 'product') {
+            const p = productFromRecord(parsed)
+            await storage.applyRemoteChange({
+              entityType: 'product',
+              entityId: change.entity_id,
+              operation: change.operation,
+              payload: p
+            })
+          } else if (change.entity_type === 'category') {
+            await storage.applyRemoteChange({ entityType: 'category', entityId: change.entity_id, operation: change.operation, payload: category(parsed) })
+          } else if (change.entity_type === 'subcategory') {
+            await storage.applyRemoteChange({ entityType: 'subcategory', entityId: change.entity_id, operation: change.operation, payload: subcategory(parsed) })
+          } else if (change.entity_type === 'vendor') {
+            await storage.applyRemoteChange({ entityType: 'vendor', entityId: change.entity_id, operation: change.operation, payload: vendor(parsed) })
+          } else if (change.entity_type === 'presentation') {
+            await storage.applyRemoteChange({ entityType: 'presentation', entityId: change.entity_id, operation: change.operation, payload: parsed })
           }
         }
-        if (p.detailImageKey) {
-          const detailLocalPath = `${p.id}-detail-v${p.imageVersion}`
-          if (!(await storage.hasImage(detailLocalPath))) {
-            try {
-              await storage.cacheRemoteImage(p.id, 'detail', p.detailImage, p.imageVersion, p.detailImageChecksum, p.detailImageSizeBytes)
-            } catch (err) {
-              console.warn(`Incremental detail cache failed for ${p.designCode}:`, err)
-            }
-          }
-        }
-      } else if (change.entity_type === 'category') {
-        await storage.applyRemoteChange({ entityType: 'category', entityId: change.entity_id, operation: change.operation, payload: category(parsed) })
-      } else if (change.entity_type === 'subcategory') {
-        await storage.applyRemoteChange({ entityType: 'subcategory', entityId: change.entity_id, operation: change.operation, payload: subcategory(parsed) })
-      } else if (change.entity_type === 'vendor') {
-        await storage.applyRemoteChange({ entityType: 'vendor', entityId: change.entity_id, operation: change.operation, payload: vendor(parsed) })
-      } else if (change.entity_type === 'presentation') {
-        await storage.applyRemoteChange({ entityType: 'presentation', entityId: change.entity_id, operation: change.operation, payload: parsed })
+        await storage.setSyncCheckpoint(change.sequence_number)
       }
-    }
-    await storage.setSyncCheckpoint(change.sequence_number)
+    })
+    if (changes.length < 500) break
   }
 
   // 3. Ensure historical orders are synced
   await syncHistoryOrders(token)
 
-  // 4. Automatic background download: ensure all active products have high-res detail images cached offline
-  try {
-    const allProducts = await storage.products()
-    let cachedDetails = 0
-    for (const p of allProducts) {
-      if (p.deleted) continue
-      if (p.detailImageKey) {
-        const detailLocalPath = `${p.id}-detail-v${p.imageVersion}`
-        const hasDetail = await storage.hasImage(detailLocalPath)
-        if (!hasDetail) {
-          try {
-            onProgress?.(`Caching offline detail: ${p.designCode}...`)
-            await storage.cacheRemoteImage(p.id, 'detail', p.detailImage, p.imageVersion, p.detailImageChecksum, p.detailImageSizeBytes)
-            cachedDetails++
-          } catch (err) {
-            console.warn(`Auto detail caching failed for ${p.designCode}:`, err)
-          }
-        }
-      }
-    }
-    if (cachedDetails > 0) {
-      onProgress?.(`Synced ${cachedDetails} high-res detail image(s) for offline viewing.`)
-    }
-  } catch (err) {
-    console.warn('Auto detail caching check failed:', err)
-  }
+  // 4. Photos: nothing to do here. The image downloader compares the catalogue with the files on this device after
+  //    every reload of the product list and fetches whatever is new, replaced or missing.
 
-  return { synced: true, uploaded, failed, pulled: changes.length }
+  return { synced: true, uploaded, failed, heldBack, pulled }
 }
 
 export async function syncHistoryOrders(token: string) {
@@ -474,8 +402,10 @@ export async function syncHistoryOrders(token: string) {
     const existingOrders = await storage.orders()
     const existingMap = new Map(existingOrders.map(o => [o.id, o]))
     const existingByNumber = new Map<number, Order>()
+    // An order still waiting to upload is never matched by number: it is a different order that happens to share it.
+    const pending = await storage.pendingOrderIds()
     for (const o of existingOrders) {
-      if (o.orderNumber && o.orderNumber > 0) {
+      if (o.orderNumber && o.orderNumber > 0 && !pending.has(o.id)) {
         existingByNumber.set(o.orderNumber, o)
       }
     }
@@ -504,44 +434,4 @@ export async function syncHistoryOrders(token: string) {
   } catch (err) {
     console.warn('History order sync failed:', err)
   }
-}
-
-export async function recoverMissingImages(token: string, onProgress?: (msg: string) => void) {
-  if (!navigator.onLine) throw new Error('Cannot run image recovery while offline.')
-  const products = await storage.products()
-  let recovered = 0, failed = 0
-  for (const p of products) {
-    if (p.deleted) continue
-    const gridPath = `${p.id}-grid-v${p.imageVersion}`
-    const detailPath = `${p.id}-detail-v${p.imageVersion}`
-
-    if (!(await storage.hasImage(gridPath)) && p.gridImageKey) {
-      onProgress?.(`Recovering grid thumbnail for ${p.designCode}...`)
-      try {
-        const meta = await workerApi<{ available: boolean; url: string; sizeBytes: number; checksum: string }>(`/images/${encodeURIComponent(p.gridImageKey)}/recovery`, { token })
-        if (meta.available && meta.url) {
-          await storage.cacheRemoteImage(p.id, 'grid', meta.url, p.imageVersion, meta.checksum, meta.sizeBytes)
-          recovered++
-        }
-      } catch (err) {
-        console.warn(`Grid recovery error for ${p.designCode}:`, err)
-        failed++
-      }
-    }
-
-    if (!(await storage.hasImage(detailPath)) && p.detailImageKey) {
-      onProgress?.(`Recovering detail asset for ${p.designCode}...`)
-      try {
-        const meta = await workerApi<{ available: boolean; url: string; sizeBytes: number; checksum: string }>(`/images/${encodeURIComponent(p.detailImageKey)}/recovery`, { token })
-        if (meta.available && meta.url) {
-          await storage.cacheRemoteImage(p.id, 'detail', meta.url, p.imageVersion, meta.checksum, meta.sizeBytes)
-          recovered++
-        }
-      } catch (err) {
-        console.warn(`Detail recovery error for ${p.designCode}:`, err)
-        failed++
-      }
-    }
-  }
-  return { recovered, failed }
 }

@@ -380,3 +380,68 @@ describe('business invariant helpers',()=>{
 })
 
 
+
+describe('on-device image naming', () => {
+  const base = { id: 'p-1', designCode: 'NS 1', categoryId: 'c', subcategoryId: 's', weightMg: 1000, gridImage: '', detailImage: '', imageVersion: 1, syncState: 'SYNCED' as const }
+  const cloud = { ...base, gridImageKey: 'org/products/p-1/v1/grid', detailImageKey: 'org/products/p-1/v1/detail', gridImageChecksum: 'a'.repeat(64), detailImageChecksum: 'b'.repeat(64), gridImageSizeBytes: 40000, detailImageSizeBytes: 300000 }
+
+  it('names files by product, kind and cloud checksum', async () => {
+    const { imageName, THUMB_KIND } = await import('./image-names')
+    expect(THUMB_KIND).toBe('t360q78')
+    expect(imageName(cloud, 'thumb')).toBe(`p-1.t360q78.${'a'.repeat(16)}`)
+    expect(imageName(cloud, 'detail')).toBe(`p-1.detail.${'b'.repeat(16)}`)
+  })
+
+  it('a replaced photo gets a new file name even though the server keeps the same key and image version', async () => {
+    const { imageName } = await import('./image-names')
+    const replaced = { ...cloud, gridImageChecksum: 'c'.repeat(64), detailImageChecksum: 'd'.repeat(64) }
+    expect(replaced.gridImageKey).toBe(cloud.gridImageKey)
+    expect(replaced.imageVersion).toBe(cloud.imageVersion)
+    expect(imageName(replaced, 'thumb')).not.toBe(imageName(cloud, 'thumb'))
+    expect(imageName(replaced, 'detail')).not.toBe(imageName(cloud, 'detail'))
+  })
+
+  it('falls back to the cloud key, then the local image version, when no checksum is known', async () => {
+    const { sourceSignature } = await import('./image-names')
+    expect(sourceSignature(undefined, 'org/products/p-1/v1/grid', 1)).toMatch(/^k[0-9a-f]{16}$/)
+    expect(sourceSignature(undefined, 'org/products/p-1/v1/grid', 1)).not.toBe(sourceSignature(undefined, 'org/products/p-2/v1/grid', 1))
+    expect(sourceSignature('not-a-checksum', undefined, 3)).toBe('l3')
+    expect(sourceSignature(undefined, undefined, undefined)).toBe('l1')
+  })
+
+  it('never produces a name the file system rejects', async () => {
+    const { imageName, productIdOfImage } = await import('./image-names')
+    const name = imageName({ ...cloud, id: 'weird/id.with:chars' }, 'thumb')
+    expect(name).not.toMatch(/[/:]/)
+    expect(name.split('.')).toHaveLength(3)
+    expect(productIdOfImage(name)).toBe('weird_id_with_chars')
+  })
+
+  it('a synced product wants a thumbnail and a high-res file from the cloud, verified by checksum', async () => {
+    const { wantedImages } = await import('./image-names')
+    const wanted = wantedImages(cloud)
+    expect(wanted.map(w => w.rep)).toEqual(['thumb', 'detail'])
+    expect(wanted[0].url).toContain('org/products/p-1/v1/grid')
+    expect(wanted[0].checksum).toBe('a'.repeat(64))
+    expect(wanted[1].sizeBytes).toBe(300000)
+    expect(wanted[0].legacy).toBe('p-1-grid-v1')
+    expect(wanted[1].legacy).toBe('p-1-detail-v1')
+  })
+
+  it('a design that has not reached the cloud keeps its upload source and has no cloud address', async () => {
+    const { wantedImages } = await import('./image-names')
+    const wanted = wantedImages({ ...base, id: 'local-1', imageVersion: 2, syncState: 'PENDING_UPLOAD' })
+    expect(wanted.map(w => w.rep)).toEqual(['grid', 'thumb', 'detail'])
+    expect(wanted.every(w => w.url === null)).toBe(true)
+    expect(wanted[1].localSource).toBe(wanted[0].name)
+    expect(wanted[0].legacy).toBe('local-1-grid-v2')
+  })
+
+  it('detects a thumbnail cut short by an interrupted write', async () => {
+    const { looksLikeCompleteJpeg } = await import('./image-names')
+    const whole = new Uint8Array(400); whole[0] = 0xff; whole[1] = 0xd8; whole[398] = 0xff; whole[399] = 0xd9
+    expect(looksLikeCompleteJpeg(whole)).toBe(true)
+    expect(looksLikeCompleteJpeg(whole.slice(0, 200))).toBe(false)
+    expect(looksLikeCompleteJpeg(new Uint8Array(0))).toBe(false)
+  })
+})
