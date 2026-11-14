@@ -221,9 +221,8 @@ export function App(){
    demoPdf?: GeneratedPdfResult
  } | null>(null)
  const [heldBackList,setHeldBackList]=useState<Product[]>([]),[unsentDesigns,setUnsentDesigns]=useState(0)
- const [editingProduct,setEditingProduct]=useState<Product|null>(null),[archivingProduct,setArchivingProduct]=useState<Product|null>(null),[archivedProductsList,setArchivedProductsList]=useState<Product[]>([]),[adminProductTab,setAdminProductTab]=useState<'active'|'add'|'archived'>('active'),[adminSearch,setAdminSearch]=useState('')
- const [archivedVendorsList,setArchivedVendorsList]=useState<Vendor[]>([]),[archivedCategoriesList,setArchivedCategoriesList]=useState<Category[]>([]),[archivedSubcategoriesList,setArchivedSubcategoriesList]=useState<Subcategory[]>([])
- const [editingVendor,setEditingVendor]=useState<Vendor|null>(null),[archivingVendor,setArchivingVendor]=useState<Vendor|null>(null),[adminVendorTab,setAdminVendorTab]=useState<'active'|'add'|'archived'>('active'),[vendorSearch,setVendorSearch]=useState(''),[adminDeviceTab,setAdminDeviceTab]=useState<'active'|'staff'|'add_staff'|'all'>('active')
+ const [editingProduct,setEditingProduct]=useState<Product|null>(null),[deletingProduct,setDeletingProduct]=useState<Product|null>(null),[archivedProductsList,setArchivedProductsList]=useState<Product[]>([]),[adminProductTab,setAdminProductTab]=useState<'active'|'add'>('active'),[adminSearch,setAdminSearch]=useState('')
+ const [editingVendor,setEditingVendor]=useState<Vendor|null>(null),[deletingVendor,setDeletingVendor]=useState<Vendor|null>(null),[adminVendorTab,setAdminVendorTab]=useState<'active'|'add'>('active'),[vendorSearch,setVendorSearch]=useState(''),[adminDeviceTab,setAdminDeviceTab]=useState<'active'|'staff'|'add_staff'|'all'>('active')
  const [staffList,setStaffList]=useState<StaffUser[]>([])
  const [staffLoading,setStaffLoading]=useState(false)
  const [newStaffUsername,setNewStaffUsername]=useState('')
@@ -303,7 +302,8 @@ export function App(){
   window.addEventListener('keydown', handleKeyDown)
   return () => window.removeEventListener('keydown', handleKeyDown)
  }, [detail, activeIndex, activeList, hasPrev, hasNext])
-  const load=async()=>{const [p,c,s,v,o,cp,pending,archivedP,archivedV,archivedC,archivedS]=await Promise.all([storage.products(),storage.categories(),storage.subcategories(),storage.vendors(),storage.orders(),storage.syncCheckpoint(),storage.pendingOperations(),storage.archivedProducts(),storage.archivedVendors(),storage.archivedCategories(),storage.archivedSubcategories()]);const [held,queued,unsent]=await Promise.all([storage.heldBackProducts(),storage.pendingOperationCount(),storage.unsentDesignCount()]);setHeldBackList(held);setUnsentDesigns(unsent);void pending;setProducts(p);setCategories(c);setSubcategories(s);setVendors(v);setOrders(o);setSyncCheckpointVal(cp);setPendingCount(queued);setArchivedProductsList(archivedP);setArchivedVendorsList(archivedV);setArchivedCategoriesList(archivedC);setArchivedSubcategoriesList(archivedS);return p}
+  const load=async()=>{// Archived designs are no longer shown anywhere (delete is permanent); any left by an older app version are still read so their photos stay protected.
+  const [p,c,s,v,o,cp,archivedP]=await Promise.all([storage.products(),storage.categories(),storage.subcategories(),storage.vendors(),storage.orders(),storage.syncCheckpoint(),storage.archivedProducts()]);const [held,queued,unsent]=await Promise.all([storage.heldBackProducts(),storage.pendingOperationCount(),storage.unsentDesignCount()]);setHeldBackList(held);setUnsentDesigns(unsent);setProducts(p);setCategories(c);setSubcategories(s);setVendors(v);setOrders(o);setSyncCheckpointVal(cp);setPendingCount(queued);setArchivedProductsList(archivedP);return p}
   // Cloud photo size is summed from the catalogue already on this device — no request, so a sync never re-reads the whole cloud catalogue.
   const loadCloudStorage=async()=>{try{setCloudBytes(cloudImageStorageBytes(await storage.products()))}catch{setCloudBytes(null)}}
   const loadDevices=async()=>{const token=getStoredToken();if(!token)return;try{const list=await workerApi<DeviceSession[]>('/devices',{token});setDevices(list)}catch(err){setNotice(err instanceof Error?err.message:'Unable to load devices')}}
@@ -546,10 +546,8 @@ export function App(){
        await load();
        await loadCloudStorage();
        const entityLabel = op.entity_type === 'product' ? 'Design' : op.entity_type.charAt(0).toUpperCase() + op.entity_type.slice(1);
-       if (op.operation === 'RESTORE') {
-        setNotice(`${entityLabel} restored and synchronized with cloud.`);
-       } else if (op.operation === 'ARCHIVE') {
-        setNotice(`${entityLabel} archived and synchronized with cloud.`);
+       if (op.operation === 'DELETE' || op.operation === 'ARCHIVE') {
+        setNotice(`${entityLabel} permanently deleted from the cloud.`);
        } else {
         setNotice(`${entityLabel} saved and synchronized with cloud.`);
        }
@@ -569,10 +567,8 @@ export function App(){
     if (lastError) {
      setNotice(`Sync stopped: ${lastError}. Changes remain in local queue for retry.`);
     } else if (uploaded > 0) {
-     if (lastOp === 'RESTORE') {
-      setNotice('Item successfully restored to active cloud catalogue.');
-     } else if (lastOp === 'ARCHIVE') {
-      setNotice('Item successfully archived in cloud catalogue.');
+     if (lastOp === 'DELETE' || lastOp === 'ARCHIVE') {
+      setNotice('Item permanently deleted from the cloud.');
      } else {
       setNotice(`Cloud synchronization completed: ${uploaded} change(s) successfully synchronized.`);
      }
@@ -614,7 +610,7 @@ export function App(){
     if(navigator.onLine&&token){triggerBackgroundUpload()}
    }catch(err){setNotice(err instanceof Error?`Failed to update design: ${err.message}`:'Failed to update design.')}
   }
-  const handleConfirmArchive=async(product:Product)=>{
+  const handleConfirmDelete=async(product:Product)=>{
    try{
     await storage.deleteProduct(product.id)
     await load()
@@ -631,13 +627,6 @@ export function App(){
       }
     }
    }catch(err){setNotice(err instanceof Error?`Failed to delete design: ${err.message}`:'Failed to delete design.')}
-  }
-  const handleRestoreProduct=async(product:Product)=>{
-   try{
-    await storage.restoreProduct(product.id)
-    await load()
-    setNotice(`${product.designCode} restored.`)
-   }catch(err){setNotice(err instanceof Error?`Failed to restore design: ${err.message}`:'Failed to restore design.')}
   }
 
   const handleUpdateVendor = async (updated: Vendor) => {
@@ -669,7 +658,7 @@ export function App(){
       setNotice(err instanceof Error ? `Failed to update vendor: ${err.message}` : 'Failed to update vendor.')
     }
   }
-  const handleArchiveVendor = async (vendor: Vendor) => {
+  const handleDeleteVendor = async (vendor: Vendor) => {
    try {
      await storage.deleteVendor(vendor.id)
      await load()
@@ -689,15 +678,6 @@ export function App(){
      setNotice(err instanceof Error ? `Failed to delete vendor: ${err.message}` : 'Failed to delete vendor.')
    }
   }
-  const handleRestoreVendor = async (id: string) => {
-   try {
-     await storage.restoreVendor(id)
-     await load()
-     setNotice('Vendor restored.')
-   } catch (err) {
-     setNotice(err instanceof Error ? `Failed to restore vendor: ${err.message}` : 'Failed to restore vendor.')
-   }
-  }
 
   const handleUpdateCategory = async (updated: Category) => {
    try {
@@ -709,7 +689,7 @@ export function App(){
      setNotice(err instanceof Error ? `Failed to update category: ${err.message}` : 'Failed to update category.')
    }
   }
-  const handleArchiveCategory = async (id: string) => {
+  const handleDeleteCategory = async (id: string) => {
    try {
      const res = await storage.deleteCategory(id)
      if (!res.ok) {
@@ -733,15 +713,6 @@ export function App(){
      setNotice(err instanceof Error ? `Failed to delete category: ${err.message}` : 'Failed to delete category.')
    }
   }
-  const handleRestoreCategory = async (id: string) => {
-   try {
-     await storage.restoreCategory(id)
-     await load()
-     setNotice('Category restored.')
-   } catch (err) {
-     setNotice(err instanceof Error ? `Failed to restore category: ${err.message}` : 'Failed to restore category.')
-   }
-  }
 
   const handleUpdateSubcategory = async (updated: Subcategory) => {
    try {
@@ -753,7 +724,7 @@ export function App(){
      setNotice(err instanceof Error ? `Failed to update subcategory: ${err.message}` : 'Failed to update subcategory.')
    }
   }
-  const handleArchiveSubcategory = async (id: string) => {
+  const handleDeleteSubcategory = async (id: string) => {
    try {
      const res = await storage.deleteSubcategory(id)
      if (!res.ok) {
@@ -775,16 +746,6 @@ export function App(){
      }
    } catch (err) {
      setNotice(err instanceof Error ? `Failed to delete subcategory: ${err.message}` : 'Failed to delete subcategory.')
-   }
-  }
-  const handleRestoreSubcategory = async (id: string) => {
-   try {
-     await storage.restoreSubcategory(id)
-     await load()
-     setNotice('Subcategory restored to active taxonomy.')
-     triggerBackgroundUpload()
-   } catch (err) {
-     setNotice(err instanceof Error ? `Failed to restore subcategory: ${err.message}` : 'Failed to restore subcategory.')
    }
   }
 
@@ -1071,7 +1032,7 @@ export function App(){
       <p className="eyebrow">vendor directory</p>
       <h1>Vendors for every order.</h1>
      </div>
-     <span>{vendors.filter(v=>!v.deleted).length} active · {archivedVendorsList.length} archived</span>
+     <span>{vendors.filter(v=>!v.deleted).length} vendors</span>
     </div>
 
     <div className="catalogue-admin-tabs">
@@ -1088,13 +1049,6 @@ export function App(){
       onClick={()=>setAdminVendorTab('add')}
      >
       + Add New Vendor
-     </button>
-     <button
-      type="button"
-      className={`catalogue-admin-tab ${adminVendorTab==='archived'?'active':''}`}
-      onClick={()=>setAdminVendorTab('archived')}
-     >
-      Archived Vendors <span className="admin-badge">{archivedVendorsList.length}</span>
      </button>
     </div>
 
@@ -1157,49 +1111,15 @@ export function App(){
             type="button"
             className="quiet"
             style={{minHeight:'36px',padding:'0 14px',fontSize:'12px',color:'var(--danger)',borderColor:'var(--danger)'}}
-            onClick={()=>setArchivingVendor(v)}
+            onClick={()=>setDeletingVendor(v)}
            >
-            🗑️ Archive
+            🗑️ Delete
            </button>
           </div>
          </div>
         ))}
        {vendors.filter(v=>!v.deleted).length===0&&(
         <p className="muted" style={{padding:'20px 0'}}>No active vendors yet. Add a vendor using the &quot;+ Add New Vendor&quot; tab.</p>
-       )}
-      </div>
-     </div>
-    )}
-
-    {adminVendorTab==='archived'&&(
-     <div>
-      <div style={{padding:'12px 16px',background:'var(--gold-soft)',borderRadius:'10px',marginBottom:'var(--space-4)',fontSize:'13px',color:'var(--ink)'}}>
-       ℹ️ Archived vendors are hidden from order creation trays, but historical orders, order summaries, and generated manufacturer PDFs retain all vendor details intact. You can restore them anytime.
-      </div>
-      <div style={{display:'flex',flexDirection:'column',gap:'var(--space-3)'}}>
-       {archivedVendorsList.length===0?(
-        <p className="muted" style={{padding:'20px 0'}}>No archived vendors.</p>
-       ):(
-        archivedVendorsList.map(v=>(
-         <div key={v.id} className="admin-vendor-card" style={{opacity:0.9}}>
-          <div className="admin-vendor-card-left">
-           <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}}>
-            <strong>{v.name}</strong>
-            <span className="admin-vendor-badge">{v.type || 'WHOLESALE'}</span>
-            <small style={{color:'var(--danger)',fontSize:'11px'}}>Archived</small>
-           </div>
-           <span>{v.address}, {v.city}</span>
-          </div>
-          <button
-           type="button"
-           className="quiet"
-           style={{minHeight:'36px',padding:'0 14px',fontSize:'12px',fontWeight:700,color:'var(--green)',borderColor:'var(--green)'}}
-           onClick={()=>void handleRestoreVendor(v.id)}
-          >
-           🔄 Restore Vendor
-          </button>
-         </div>
-        ))
        )}
       </div>
      </div>
@@ -1214,11 +1134,11 @@ export function App(){
      />
     )}
 
-    {archivingVendor&&(
+    {deletingVendor&&(
      <DeleteVendorModal
-      vendor={archivingVendor}
-      onConfirm={()=>handleArchiveVendor(archivingVendor)}
-      onClose={()=>setArchivingVendor(null)}
+      vendor={deletingVendor}
+      onConfirm={()=>handleDeleteVendor(deletingVendor)}
+      onClose={()=>setDeletingVendor(null)}
      />
     )}
    </main>
@@ -1228,9 +1148,9 @@ export function App(){
     <div className="section-title">
      <div>
       <p className="eyebrow">catalogue administration</p>
-      <h1>Manage designs &amp; active status.</h1>
+      <h1>Manage designs.</h1>
      </div>
-     <span>{products.filter(p=>!p.deleted).length} active · {archivedProductsList.length} archived</span>
+     <span>{products.filter(p=>!p.deleted).length} designs</span>
     </div>
 
     <div className="catalogue-admin-tabs">
@@ -1247,13 +1167,6 @@ export function App(){
       onClick={()=>setAdminProductTab('add')}
      >
       + Add New Design
-     </button>
-     <button
-      type="button"
-      className={`catalogue-admin-tab ${adminProductTab==='archived'?'active':''}`}
-      onClick={()=>setAdminProductTab('archived')}
-     >
-      Archived Designs <span className="admin-badge">{archivedProductsList.length}</span>
      </button>
     </div>
 
@@ -1303,7 +1216,7 @@ export function App(){
              type="button"
              className="quiet"
              style={{minHeight:'36px',padding:'0 12px',fontSize:'12px',color:'var(--danger)',borderColor:'var(--danger)'}}
-             onClick={()=>setArchivingProduct(p)}
+             onClick={()=>setDeletingProduct(p)}
             >
              🗑️ Delete
             </button>
@@ -1315,58 +1228,6 @@ export function App(){
      </div>
     )}
 
-    {adminProductTab==='archived'&&(
-     <div>
-      <div style={{padding:'12px 16px',background:'var(--gold-soft)',borderRadius:'10px',marginBottom:'var(--space-4)',fontSize:'13px',color:'var(--ink)'}}>
-       ℹ️ Archived designs are hidden from the active sales catalogue and new orders, but existing orders retain historical snapshots. You can restore them anytime.
-      </div>
-      <div style={{marginBottom:'var(--space-4)'}}>
-       <input
-        type="search"
-        placeholder="Search archived designs by code..."
-        value={adminSearch}
-        onChange={e=>setAdminSearch(e.target.value)}
-        style={{maxWidth:'360px'}}
-       />
-      </div>
-      <div className="admin-card-list">
-       {archivedProductsList.length===0?(
-        <p className="muted" style={{padding:'20px 0'}}>No archived designs. All designs in the catalogue are active.</p>
-       ):(
-        archivedProductsList
-         .filter(p=>!adminSearch||p.designCode.toLowerCase().includes(adminSearch.toLowerCase().trim()))
-         .map(p=>{
-          const cat=categories.find(c=>c.id===p.categoryId)?.name||'Jewelry'
-          const sub=subcategories.find(s=>s.id===p.subcategoryId)?.name
-          return (
-           <div key={p.id} className="admin-product-row" style={{opacity:0.9}}>
-            <div className="admin-product-row-left">
-             <ProductThumb product={p}/>
-             <div>
-              <strong style={{fontSize:'15px'}}>{p.designCode}</strong>
-              <span style={{fontSize:'13px',color:'var(--muted)',display:'block'}}>
-               {cat}{sub?` / ${sub}`:''} &middot; {grams(p.weightMg)} g
-              </span>
-              <small style={{color:'var(--danger)',fontSize:'11px'}}>Archived / Inactive</small>
-             </div>
-            </div>
-            <div className="admin-product-row-actions">
-             <button
-              type="button"
-              className="quiet"
-              style={{minHeight:'36px',padding:'0 14px',fontSize:'12px',fontWeight:700,color:'var(--green)',borderColor:'var(--green)'}}
-              onClick={()=>void handleRestoreProduct(p)}
-             >
-              🔄 Restore to Catalogue
-             </button>
-            </div>
-           </div>
-          )
-         })
-       )}
-      </div>
-     </div>
-    )}
    </main>
   )}
   {view==='batch'&&<main className="single-view"><div className="section-title"><div><p className="eyebrow">queued image workflow</p><h1>Batch design entry</h1></div><span>{products.filter(p=>!p.deleted).length} designs</span></div><BatchEntry categories={categories} subcategories={subcategories} onProduct={stageProduct}/></main>}
@@ -1375,17 +1236,13 @@ export function App(){
     <Taxonomy
      categories={categories}
      subcategories={subcategories}
-     archivedCategoriesList={archivedCategoriesList}
-     archivedSubcategoriesList={archivedSubcategoriesList}
      products={products}
      onCategory={addCategory}
      onSubcategory={addSubcategory}
      onUpdateCategory={handleUpdateCategory}
      onUpdateSubcategory={handleUpdateSubcategory}
-     onArchiveCategory={handleArchiveCategory}
-     onRestoreCategory={handleRestoreCategory}
-     onArchiveSubcategory={handleArchiveSubcategory}
-     onRestoreSubcategory={handleRestoreSubcategory}
+     onDeleteCategory={handleDeleteCategory}
+     onDeleteSubcategory={handleDeleteSubcategory}
      notice={setNotice}
     />
    </main>
@@ -2026,11 +1883,11 @@ export function App(){
      onClose={() => setEditingProduct(null)}
     />
    )}
-   {archivingProduct && (
+   {deletingProduct && (
     <DeleteConfirmModal
-     product={archivingProduct}
-     onConfirm={() => handleConfirmArchive(archivingProduct)}
-     onClose={() => setArchivingProduct(null)}
+     product={deletingProduct}
+     onConfirm={() => handleConfirmDelete(deletingProduct)}
+     onClose={() => setDeletingProduct(null)}
     />
    )}
   <footer>Built by Aadit Mehta, contact mail: <a href="mailto:aaditbusiness15@gmail.com">aaditbusiness15@gmail.com</a>, mobile: <a href="tel:7304767688">7304767688</a></footer></div>

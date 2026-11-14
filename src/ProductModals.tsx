@@ -283,8 +283,8 @@ export function DeleteConfirmModal({
           <button type="button" className="close" onClick={onClose} aria-label="Close modal">×</button>
         </div>
 
-        <div className="archive-modal-body">
-          <div className="archive-product-preview">
+        <div className="delete-modal-body">
+          <div className="delete-product-preview">
             <ProductThumb product={product} />
             <div>
               <strong>{product.designCode}</strong>
@@ -297,7 +297,7 @@ export function DeleteConfirmModal({
           </p>
           <ul style={{ margin: '0 0 16px', paddingLeft: '20px', fontSize: '13px', color: 'var(--muted)', lineHeight: 1.6 }}>
             <li>This design and its images will be <strong>completely removed from the cloud and this device</strong>.</li>
-            <li>This action <strong>cannot be undone</strong> (no archive).</li>
+            <li>This action <strong>cannot be undone</strong>.</li>
             <li>Historical orders already finalized will preserve snapshot records.</li>
           </ul>
 
@@ -323,4 +323,3 @@ export function DeleteConfirmModal({
   )
 }
 
-export const ArchiveConfirmModal = DeleteConfirmModal

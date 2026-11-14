@@ -164,7 +164,6 @@ export function DeleteCategoryModal({ category, productCount, onConfirm, onClose
   )
 }
 
-export const ArchiveCategoryModal = DeleteCategoryModal
 
 interface EditSubcategoryModalProps {
   subcategory: Subcategory
@@ -329,4 +328,3 @@ export function DeleteSubcategoryModal({ subcategory, productCount, onConfirm, o
   )
 }
 
-export const ArchiveSubcategoryModal = DeleteSubcategoryModal

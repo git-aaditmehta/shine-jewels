@@ -258,63 +258,55 @@ export function BatchEntry({categories,subcategories,onProduct}:Pick<Props,'cate
 
 import {
   EditCategoryModal,
-  ArchiveCategoryModal,
+  DeleteCategoryModal,
   EditSubcategoryModal,
-  ArchiveSubcategoryModal
+  DeleteSubcategoryModal
 } from './TaxonomyModals'
 
 export interface TaxonomyProps {
   categories: Category[]
   subcategories: Subcategory[]
-  archivedCategoriesList: Category[]
-  archivedSubcategoriesList: Subcategory[]
   products: Product[]
   onCategory: (c: Category) => Promise<void>
   onSubcategory: (s: Subcategory) => Promise<void>
   onUpdateCategory: (c: Category) => Promise<void>
   onUpdateSubcategory: (s: Subcategory) => Promise<void>
-  onArchiveCategory: (id: string) => Promise<void>
-  onRestoreCategory: (id: string) => Promise<void>
-  onArchiveSubcategory: (id: string) => Promise<void>
-  onRestoreSubcategory: (id: string) => Promise<void>
+  onDeleteCategory: (id: string) => Promise<void>
+  onDeleteSubcategory: (id: string) => Promise<void>
   notice: (s: string) => void
 }
 
 export function Taxonomy({
   categories,
   subcategories,
-  archivedCategoriesList,
-  archivedSubcategoriesList,
   products,
   onCategory,
   onSubcategory,
   onUpdateCategory,
   onUpdateSubcategory,
-  onArchiveCategory,
-  onRestoreCategory,
-  onArchiveSubcategory,
-  onRestoreSubcategory,
+  onDeleteCategory,
+  onDeleteSubcategory,
   notice
 }: TaxonomyProps) {
-  const [tab, setTab] = useState<'view' | 'add' | 'archived'>('view')
+  const [tab, setTab] = useState<'view' | 'add'>('view')
   const [search, setSearch] = useState('')
 
   const [editingCategory, setEditingCategory] = useState<Category | null>(null)
-  const [archivingCategoryState, setArchivingCategoryState] = useState<{ category: Category; productCount: number } | null>(null)
+  const [deletingCategoryState, setDeletingCategoryState] = useState<{ category: Category; productCount: number } | null>(null)
 
   const [editingSubcategory, setEditingSubcategory] = useState<Subcategory | null>(null)
-  const [archivingSubcategoryState, setArchivingSubcategoryState] = useState<{ subcategory: Subcategory; productCount: number } | null>(null)
+  const [deletingSubcategoryState, setDeletingSubcategoryState] = useState<{ subcategory: Subcategory; productCount: number } | null>(null)
 
   const activeProducts = products.filter(p => !p.deleted)
 
-  const handleStartArchiveCategory = (cat: Category) => {
+  const handleStartDeleteCategory = (cat: Category) => {
     const referencing = activeProducts.filter(p => p.categoryId === cat.id).length
-    setArchivingCategoryState({ category: cat, productCount: referencing })
+    setDeletingCategoryState({ category: cat, productCount: referencing })
   }
 
-  const handleStartArchiveSubcategory = (sub: Subcategory) => {
+  const handleStartDeleteSubcategory = (sub: Subcategory) => {
     const referencing = activeProducts.filter(p => p.subcategoryId === sub.id).length
-    setArchivingSubcategoryState({ subcategory: sub, productCount: referencing })
+    setDeletingSubcategoryState({ subcategory: sub, productCount: referencing })
   }
 
   const addCategory = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -380,13 +372,6 @@ export function Taxonomy({
         >
           + Add Category / Subcategory
         </button>
-        <button
-          type="button"
-          className={`catalogue-admin-tab ${tab === 'archived' ? 'active' : ''}`}
-          onClick={() => setTab('archived')}
-        >
-          Archived Taxonomy <span className="admin-badge">{archivedCategoriesList.length + archivedSubcategoriesList.length}</span>
-        </button>
       </div>
 
       {tab === 'view' && (
@@ -433,7 +418,7 @@ export function Taxonomy({
                           type="button"
                           className="quiet"
                           style={{ minHeight: '32px', padding: '0 10px', fontSize: '12px', color: 'var(--danger)', borderColor: 'var(--danger)' }}
-                          onClick={() => handleStartArchiveCategory(c)}
+                          onClick={() => handleStartDeleteCategory(c)}
                         >
                           🗑️ Delete
                         </button>
@@ -464,7 +449,7 @@ export function Taxonomy({
                                   type="button"
                                   className="quiet"
                                   style={{ minHeight: '24px', padding: '0 6px', fontSize: '11px', border: 'none', color: 'var(--danger)' }}
-                                  onClick={() => handleStartArchiveSubcategory(s)}
+                                  onClick={() => handleStartDeleteSubcategory(s)}
                                   title="Delete subcategory"
                                 >
                                   🗑️
@@ -518,72 +503,6 @@ export function Taxonomy({
         </div>
       )}
 
-      {tab === 'archived' && (
-        <div>
-          <div style={{ padding: '12px 16px', background: 'var(--gold-soft)', borderRadius: '10px', marginBottom: 'var(--space-4)', fontSize: '13px', color: 'var(--ink)' }}>
-            ℹ️ Archived categories and subcategories are excluded from catalogue filter dropdowns and new design entry forms. Restoring them reactivates them immediately.
-          </div>
-
-          <h3 style={{ fontSize: '16px', margin: 'var(--space-4) 0 var(--space-2)' }}>
-            Archived Categories ({archivedCategoriesList.length})
-          </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
-            {archivedCategoriesList.length === 0 ? (
-              <p className="muted" style={{ fontSize: '13px' }}>No archived categories.</p>
-            ) : (
-              archivedCategoriesList.map(c => (
-                <div key={c.id} className="admin-product-row" style={{ padding: '12px 16px' }}>
-                  <div>
-                    <strong style={{ fontSize: '15px' }}>{c.name}</strong>
-                    <span style={{ fontSize: '12px', color: 'var(--danger)', display: 'block', marginTop: '2px' }}>Archived Category</span>
-                  </div>
-                  <button
-                    type="button"
-                    className="quiet"
-                    style={{ minHeight: '32px', padding: '0 12px', fontSize: '12px', fontWeight: 700, color: 'var(--green)', borderColor: 'var(--green)' }}
-                    onClick={() => void onRestoreCategory(c.id)}
-                  >
-                    🔄 Restore Category
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-
-          <h3 style={{ fontSize: '16px', margin: 'var(--space-4) 0 var(--space-2)' }}>
-            Archived Subcategories ({archivedSubcategoriesList.length})
-          </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-            {archivedSubcategoriesList.length === 0 ? (
-              <p className="muted" style={{ fontSize: '13px' }}>No archived subcategories.</p>
-            ) : (
-              archivedSubcategoriesList.map(s => {
-                const parentCat = categories.find(c => c.id === s.categoryId)?.name ||
-                  archivedCategoriesList.find(c => c.id === s.categoryId)?.name || 'Unknown Category'
-                return (
-                  <div key={s.id} className="admin-product-row" style={{ padding: '12px 16px' }}>
-                    <div>
-                      <strong style={{ fontSize: '15px' }}>{s.name}</strong>
-                      <span style={{ fontSize: '12px', color: 'var(--muted)', display: 'block', marginTop: '2px' }}>
-                        Category: {parentCat}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      className="quiet"
-                      style={{ minHeight: '32px', padding: '0 12px', fontSize: '12px', fontWeight: 700, color: 'var(--green)', borderColor: 'var(--green)' }}
-                      onClick={() => void onRestoreSubcategory(s.id)}
-                    >
-                      🔄 Restore Subcategory
-                    </button>
-                  </div>
-                )
-              })
-            )}
-          </div>
-        </div>
-      )}
-
       {editingCategory && (
         <EditCategoryModal
           category={editingCategory}
@@ -593,15 +512,15 @@ export function Taxonomy({
         />
       )}
 
-      {archivingCategoryState && (
-        <ArchiveCategoryModal
-          category={archivingCategoryState.category}
-          productCount={archivingCategoryState.productCount}
+      {deletingCategoryState && (
+        <DeleteCategoryModal
+          category={deletingCategoryState.category}
+          productCount={deletingCategoryState.productCount}
           onConfirm={async () => {
-            await onArchiveCategory(archivingCategoryState.category.id)
-            setArchivingCategoryState(null)
+            await onDeleteCategory(deletingCategoryState.category.id)
+            setDeletingCategoryState(null)
           }}
-          onClose={() => setArchivingCategoryState(null)}
+          onClose={() => setDeletingCategoryState(null)}
         />
       )}
 
@@ -614,15 +533,15 @@ export function Taxonomy({
         />
       )}
 
-      {archivingSubcategoryState && (
-        <ArchiveSubcategoryModal
-          subcategory={archivingSubcategoryState.subcategory}
-          productCount={archivingSubcategoryState.productCount}
+      {deletingSubcategoryState && (
+        <DeleteSubcategoryModal
+          subcategory={deletingSubcategoryState.subcategory}
+          productCount={deletingSubcategoryState.productCount}
           onConfirm={async () => {
-            await onArchiveSubcategory(archivingSubcategoryState.subcategory.id)
-            setArchivingSubcategoryState(null)
+            await onDeleteSubcategory(deletingSubcategoryState.subcategory.id)
+            setDeletingSubcategoryState(null)
           }}
-          onClose={() => setArchivingSubcategoryState(null)}
+          onClose={() => setDeletingSubcategoryState(null)}
         />
       )}
     </section>

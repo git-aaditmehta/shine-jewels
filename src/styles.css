@@ -74,9 +74,9 @@
 .product-modal-footer{display:flex;justify-content:flex-end;gap:var(--space-3);margin-top:var(--space-3);padding-top:var(--space-4);border-top:1px solid var(--line)}
 .danger-btn{background:var(--danger)!important;border-color:var(--danger)!important;color:#fff!important}
 .danger-btn:hover{opacity:.9}
-.archive-modal-body{padding:24px}
-.archive-product-preview{display:flex;align-items:center;gap:14px;padding:12px;background:var(--paper);border:1px solid var(--line);border-radius:10px}
-.archive-product-preview img{width:64px;height:64px;object-fit:contain;background:var(--surface);border-radius:8px;border:1px solid var(--line)}
+.delete-modal-body{padding:24px}
+.delete-product-preview{display:flex;align-items:center;gap:14px;padding:12px;background:var(--paper);border:1px solid var(--line);border-radius:10px}
+.delete-product-preview img{width:64px;height:64px;object-fit:contain;background:var(--surface);border-radius:8px;border:1px solid var(--line)}
 
 /* Catalogue Admin Tabs & Sub-views */
 .catalogue-admin-tabs{display:flex;gap:8px;margin-bottom:var(--space-5);border-bottom:1px solid var(--line);padding-bottom:2px;overflow-x:auto}

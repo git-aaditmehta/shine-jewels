@@ -182,4 +182,3 @@ export function DeleteVendorModal({ vendor, onConfirm, onClose }: DeleteVendorMo
   )
 }
 
-export const ArchiveVendorModal = DeleteVendorModal
