@@ -317,7 +317,27 @@ export function App(){
   const handleToggleStaffActive=async(staffId:string)=>{const token=getStoredToken();if(!token)return;try{const res=await workerApi<{id:string;is_active:number}>(`/staff/${staffId}/toggle-active`,{method:'POST',token});setNotice(res.is_active===1?'Staff account activated.':'Staff account suspended and active sessions revoked.');await loadStaff();await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Failed to update staff status')}}
   const handleResetStaffPassword=async(e:React.FormEvent)=>{e.preventDefault();if(!resetPasswordStaff)return;const token=getStoredToken();if(!token)return;if(newResetPasswordValue.trim().length<4){setNotice('New password must be at least 4 characters.');return}setStaffActionSubmitting(true);try{await workerApi(`/staff/${resetPasswordStaff.id}/reset-password`,{method:'POST',token,body:{password:newResetPasswordValue.trim()}});setNotice(`Password updated successfully for @${resetPasswordStaff.username}.`);setResetPasswordStaff(null);setNewResetPasswordValue('')}catch(err){setNotice(err instanceof Error?err.message:'Failed to reset password')}finally{setStaffActionSubmitting(false)}}
   const handleDeleteStaff=async(staff:StaffUser)=>{if(!window.confirm(`Are you sure you want to permanently remove staff account "@${staff.username}"? Any active sessions will be terminated.`)){return}const token=getStoredToken();if(!token)return;try{await workerApi(`/staff/${staff.id}`,{method:'DELETE',token});setNotice(`Staff account "@${staff.username}" removed.`);await loadStaff();await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Failed to remove staff account')}}
-  const triggerSync=async(full=false)=>{const token=getStoredToken();if(!token||syncing||!navigator.onLine)return;setSyncing(true);try{const res=await synchronize(token,msg=>setNotice(msg),{full});await load();await loadCloudStorage();setNotice(res.synced?`Sync complete: ${res.uploaded} uploaded, ${res.pulled} change(s) synced.${res.heldBack?` ${res.heldBack} design(s) kept on this device because the cloud already has a different design with the same code — see the Storage tab.`:''}`:'Device is offline.')}catch(err){if(isSignInError(err)){await load();setNotice('This iPad is signed out of the cloud, so nothing can sync. Log out and sign in again — every design, photo and order on this iPad is kept and uploads afterwards.')}else setNotice(err instanceof Error?`Sync failed: ${err.message}`:'Sync failed.')}finally{setSyncing(false)}}
+  // One sync at a time, whoever starts it (button, timer, app returning to the screen, internet coming back).
+  // `quiet` (automatic syncs): no progress banner; a message only when something was uploaded, kept back or failed.
+  // uploadAfterSync: a design/vendor/order was saved while a sync was running, so its upload starts as soon as it ends.
+  const syncingRef=useRef(false),signInNoticeShown=useRef(false),uploadAfterSync=useRef(false),triggerBackgroundUploadRef=useRef<()=>void>(()=>{})
+  const triggerSync=async(full=false,quiet=false):Promise<'ok'|'failed'|'skipped'>=>{
+   const token=getStoredToken();if(!token||syncingRef.current||uploadingRef.current||!navigator.onLine)return 'skipped'
+   syncingRef.current=true;setSyncing(true)
+   try{
+    const res=await synchronize(token,quiet?undefined:msg=>setNotice(msg),{full,onBatch:async()=>{await load()}})
+    await load();await loadCloudStorage();signInNoticeShown.current=false
+    if(!res.synced){if(!quiet)setNotice('Device is offline.');return 'skipped'}
+    const held=res.heldBack?` ${res.heldBack} design(s) kept on this device because the cloud already has a different design with the same code — see the Storage tab.`:''
+    if(!quiet)setNotice(`Sync complete: ${res.uploaded} uploaded, ${res.pulled} change(s) synced.${held}`)
+    else if(res.uploaded||res.heldBack||res.failed)setNotice(`Synced automatically: ${res.uploaded} uploaded${res.failed?`, ${res.failed} will retry`:''}.${held}`)
+    return res.failed?'failed':'ok'
+   }catch(err){
+    if(isSignInError(err)){await load();if(!quiet||!signInNoticeShown.current){signInNoticeShown.current=true;setNotice('This iPad is signed out of the cloud, so nothing can sync. Log out and sign in again — every design, photo and order on this iPad is kept and uploads afterwards.')}}
+    else if(!quiet)setNotice(err instanceof Error?`Sync failed: ${err.message}`:'Sync failed.')
+    return 'failed'
+   }finally{syncingRef.current=false;setSyncing(false);if(uploadAfterSync.current){uploadAfterSync.current=false;setTimeout(()=>triggerBackgroundUploadRef.current(),0)}}
+  }
   // Admin: one-time clean-up of cloud photo files no design uses (left behind by photo replacements). Shows the list
   // first; deletes only what was shown, after the admin confirms. The cloud re-checks every file before deleting it.
   const findUnusedPhotos=async()=>{const token=getStoredToken();if(!token||photoCleanupBusy)return;setPhotoCleanupBusy(true);try{const r=await workerApi<{count:number;bytes:number;keys:string[]}>('/admin/unused-images',{token});setUnusedPhotos(r);setNotice(r.count?`${r.count} unused photo file(s) found in the cloud (${(r.bytes/1048576).toFixed(1)} MB). Nothing has been deleted.`:'No unused photo files in the cloud.')}catch(err){setNotice(err instanceof Error?`Could not check cloud photos: ${err.message}`:'Could not check cloud photos.')}finally{setPhotoCleanupBusy(false)}}
@@ -375,7 +395,7 @@ export function App(){
             if(active)setNotice(err instanceof Error?`Sync error: ${err.message}`:'Sync error.');
           }
         }else{
-          void triggerSync();
+          void triggerSync(false,true);
         }
       }
     };
@@ -385,8 +405,30 @@ export function App(){
   // Tell the photo downloader what this device should hold. It works out what is new, replaced or missing on its own.
   // Held-back designs can be hidden from the catalogue behind a same-code cloud design; their photos must be kept too.
   useEffect(()=>{if(session&&products.length){const shown=new Set(products.map(p=>p.id));imageStore.sync([...products,...archivedProductsList.filter(p=>!p.gridImageKey||!p.detailImageKey),...heldBackList.filter(p=>!shown.has(p.id))])}},[session,products,archivedProductsList,heldBackList])
-  useEffect(()=>{const onOnline=()=>{setOnline(true);void triggerSync()};const onOffline=()=>{setOnline(false)};window.addEventListener('online',onOnline);window.addEventListener('offline',onOffline);return ()=>{window.removeEventListener('online',onOnline);window.removeEventListener('offline',onOffline)}},[session])
-  useEffect(()=>{if(view==='history'&&online){void triggerSync()}},[view,online])
+  // Automatic sync: every 5 minutes while the app is on screen and online, and as soon as it comes back on screen
+  // (iPad unlocked, app switched back to). After a failure it waits longer each time (10, then 20 minutes) so a bad
+  // connection never drains the battery; one success returns it to 5 minutes. Checking for changes only reads — it adds
+  // no rows to the cloud database.
+  const triggerSyncRef=useRef(triggerSync);triggerSyncRef.current=triggerSync
+  useEffect(()=>{
+   if(!session)return
+   const BASE=5*60_000,MAX=20*60_000
+   let delay=BASE,timer:ReturnType<typeof setTimeout>|null=null,lastRun=Date.now(),stopped=false
+   const run=async()=>{
+    if(stopped||document.hidden||!navigator.onLine)return
+    lastRun=Date.now()
+    const result=await triggerSyncRef.current(false,true)
+    if(result==='failed')delay=Math.min(delay*2,MAX);else if(result==='ok')delay=BASE
+   }
+   const schedule=()=>{if(timer)clearTimeout(timer);timer=setTimeout(async()=>{await run();if(!stopped)schedule()},delay)}
+   // Back on screen: sync now if the last attempt was more than 30 seconds ago, then restart the 5-minute clock.
+   const onVisible=()=>{if(document.hidden||Date.now()-lastRun<30_000)return;void run().then(()=>{if(!stopped)schedule()})}
+   schedule()
+   document.addEventListener('visibilitychange',onVisible)
+   return()=>{stopped=true;if(timer)clearTimeout(timer);document.removeEventListener('visibilitychange',onVisible)}
+  },[session])
+  useEffect(()=>{const onOnline=()=>{setOnline(true);void triggerSync(false,true)};const onOffline=()=>{setOnline(false)};window.addEventListener('online',onOnline);window.addEventListener('offline',onOffline);return ()=>{window.removeEventListener('online',onOnline);window.removeEventListener('offline',onOffline)}},[session])
+  useEffect(()=>{if(view==='history'&&online){void triggerSync(false,true)}},[view,online])
   useEffect(()=>{if(view==='devices'&&session?.role==='ADMIN'){void loadDevices();void loadStaff()}},[view,session?.role])
  const toggle=(id:string)=>setSelected(x=>x[id]?Object.fromEntries(Object.entries(x).filter(([k])=>k!==id)):{...x,[id]:{quantity:'',remark:''}})
  const removeFromOrder=(id:string)=>setSelected(x=>{if(!x[id])return x;const next={...x};delete next[id];return next})
@@ -531,7 +573,8 @@ export function App(){
  const triggerBackgroundUpload = () => {
   const token = getStoredToken();
   if (!token || !navigator.onLine) return;
-  if (uploadingRef.current || syncing) return;
+  if (syncingRef.current) { uploadAfterSync.current = true; return }
+  if (uploadingRef.current) return;
   uploadingRef.current = true;
   setUploading(true);
 
@@ -608,6 +651,7 @@ export function App(){
    setNotice(error instanceof Error?`Image could not be saved on this device: ${error.message}`:'Image could not be saved on this device.')
   }
  }
+ triggerBackgroundUploadRef.current=triggerBackgroundUpload
   const handleSaveEdit=async(updated:Product)=>{
    try{
     await storage.updateProduct(updated)

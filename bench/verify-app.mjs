@@ -197,6 +197,30 @@ const scenarios = {
     } finally { cloud.signedOut = false; cloud.codes = new Map(); await d.close() }
   },
 
+  // Automatic sync: coming back to the app pulls changes made on other devices, quietly, without flooding the cloud.
+  async autosync() {
+    const d = await device()
+    try {
+      await seed(d.context, { count: 20, cloudFraction: 0, variants: 4, detailSide: 400 })
+      cloud.changes = []
+      await d.context.addInitScript(s => { localStorage.setItem('shine-jewels.session', s); sessionStorage.setItem('shine-jewels.session', s) }, SESSION)
+      const page = await d.context.newPage(); await page.goto(ORIGIN)
+      await page.waitForFunction(() => document.body.innerText.includes('20 designs'), null, { timeout: 30000 })
+      await sleep(3000); cloud.apiCalls.length = 0
+      // Another device adds a design to the cloud.
+      cloud.changes = [{ sequence_number: 5, entity_type: 'product', entity_id: 'laptop-1', operation: 'CREATE', payload: JSON.stringify({ id: 'laptop-1', designCode: 'LAP 1', categoryId: 'cat-0', subcategoryId: 'sub-0-0', weightMg: 12000, imageVersion: 1, gridImage: { key: 'bench/products/bench-00001/v1/grid', sizeBytes: 1, checksum: 'a'.repeat(64) }, detailImage: { key: 'bench/products/bench-00001/v1/detail', sizeBytes: 1, checksum: 'b'.repeat(64) } }) }]
+      await sleep(32000) // more than 30 s since the last sync
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+      const arrived = await page.waitForFunction(() => document.body.innerText.includes('21 designs'), null, { timeout: 15000 }).then(() => true).catch(() => false)
+      const notice = await page.evaluate(() => document.querySelector('.notice')?.textContent || '')
+      const calls = cloud.apiCalls.filter(c => c.includes('/sync/changes')).length
+      check('auto-sync: returning to the app pulls a design added on another device', arrived)
+      check('auto-sync: no banner when nothing was uploaded', !/Sync complete|Synced automatically/.test(notice), notice.slice(0, 80))
+      check('auto-sync: no request flood (one check in ~35 s)', calls >= 1 && calls <= 2, `${calls} change checks`)
+      check('auto-sync: routine sync does not re-read the order history', !cloud.apiCalls.some(c => c.includes('/history')), cloud.apiCalls.join(' ; ').slice(0, 160))
+    } finally { cloud.changes = []; await d.close() }
+  },
+
   // Staff (salesperson) accounts cannot delete anything, clear the upload queue or wipe the device.
   async staff() {
     const d = await device()
@@ -260,7 +284,9 @@ const scenarios = {
       const page = await d.context.newPage(); cloud.apiCalls.length = 0
       await page.goto(ORIGIN, { waitUntil: 'commit' })
       const ready = await page.waitForFunction(n => document.body.innerText.includes(`${n.toLocaleString('en-US').replace(',', '')} designs`) && performance.now(), COUNT, { timeout: 120000 }).then(h => h.jsonValue()).catch(() => null)
-      const synced = await page.waitForFunction(() => /Sync complete|Sync failed/.test(document.body.innerText) && performance.now(), null, { timeout: 120000 }).then(h => h.jsonValue()).catch(() => null)
+      // The on-open sync is quiet now (no banner): wait for its change check to reach the cloud, then read the page clock.
+      let synced = null
+      for (let i = 0; i < 600 && synced === null; i++) { if (cloud.apiCalls.some(c => c.includes('/sync/changes'))) synced = await page.evaluate(() => performance.now()); else await sleep(50) }
       const bootstraps = cloud.apiCalls.filter(c => c.includes('/sync/bootstrap')).length
       check('10,000 designs: catalogue opens in under 2 seconds', ready !== null && ready < 2000, `${Math.round(ready)} ms`)
       check('10,000 designs: background sync finishes in under 3 seconds', synced !== null && synced < 3000, `${Math.round(synced)} ms`)

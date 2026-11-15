@@ -320,7 +320,7 @@ export function cloudImageStorageBytes(products: Product[]) {
  * routine syncs skip that, because new orders already arrive through the change feed and the cross-check made every
  * sync read the whole order history in the cloud database.
  */
-export async function synchronize(token: string, onProgress?: (msg: string) => void, options: { full?: boolean } = {}) {
+export async function synchronize(token: string, onProgress?: (msg: string) => void, options: { full?: boolean; onBatch?: () => Promise<void> } = {}) {
   if (!navigator.onLine) return { synced: false, reason: 'offline' }
 
   // 1. Push offline queued operations
@@ -329,6 +329,7 @@ export async function synchronize(token: string, onProgress?: (msg: string) => v
   onProgress?.('Uploading queued offline modifications...')
   let uploaded = 0, failed = 0, heldBack = 0
   const tried = new Set<string>()
+  const total = await storage.pendingOperationCount()
   for (let round = 0; round < 200; round++) {
     const pending = (await storage.pendingOperations()).filter(operation => !tried.has(operation.id))
     if (!pending.length) break
@@ -346,7 +347,10 @@ export async function synchronize(token: string, onProgress?: (msg: string) => v
         await storage.completeOperation(operation.id, error instanceof Error ? error.message : 'Sync failed')
         failed++
       }
-      if ((uploaded + failed + heldBack) % 5 === 0) onProgress?.(`Uploading saved changes… ${uploaded} uploaded${failed ? `, ${failed} will retry` : ''}${heldBack ? `, ${heldBack} kept on device` : ''}`)
+      const done = uploaded + failed + heldBack
+      if (done % 5 === 0) onProgress?.(`Uploading saved changes… ${done} of ${total}${failed ? ` (${failed} will retry)` : ''}${heldBack ? ` (${heldBack} kept on device)` : ''}`)
+      // Every 10 items the screen re-reads the device's data, so counts (queue, photos) stay true during a long upload.
+      if (done % 10 === 0) await options.onBatch?.().catch(() => {})
     }
   }
 
