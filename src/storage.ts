@@ -304,7 +304,9 @@ class SqliteOpfsStorage implements CatalogueStorage {
   async canDeleteCategory(id: string): Promise<{ allowed: boolean; productCount: number }> {
     await this.ready
     const activeProds = await this.products()
-    const count = activeProds.filter(p => !p.deleted && p.categoryId === id).length
+    // Designs filed under any of its subcategories count too: those subcategories are deleted with the category.
+    const subIds = new Set((await this.subcategories()).filter(s => s.categoryId === id).map(s => s.id))
+    const count = activeProds.filter(p => !p.deleted && (p.categoryId === id || subIds.has(p.subcategoryId))).length
     return { allowed: count === 0, productCount: count }
   }
   async canArchiveCategory(id: string): Promise<{ allowed: boolean; productCount: number }> {
@@ -314,7 +316,14 @@ class SqliteOpfsStorage implements CatalogueStorage {
     await this.ready
     const check = await this.canDeleteCategory(id)
     if (!check.allowed) {
-      return { ok: false, reason: `Cannot delete category: It is currently referenced by ${check.productCount} active design(s). Please delete those designs first.` }
+      return { ok: false, reason: `This category can't be deleted because it has ${check.productCount} design(s) in it. Delete or move those designs first.` }
+    }
+    // Its (design-free) subcategories go with it. The cloud deletes them together with the category, so only the
+    // category's delete is queued; any not-yet-uploaded changes to those subcategories are dropped.
+    const subs = (await this.subcategories()).filter(s => s.categoryId === id)
+    for (const sub of subs) {
+      await this.db.execute('DELETE FROM local_entities WHERE entity_type=? AND id=?', ['subcategory', sub.id])
+      await this.db.execute("DELETE FROM pending_operations WHERE entity_type='subcategory' AND json_extract(payload,'$.id')=?", [sub.id])
     }
     await this.db.execute('DELETE FROM local_entities WHERE entity_type=? AND id=?', ['category', id])
     await this.db.queueOperation('category', 'DELETE', { id })
@@ -457,7 +466,10 @@ class SqliteOpfsStorage implements CatalogueStorage {
       const generatedAt = String(o.generatedAt || o.generated_at || o.createdAt || new Date().toISOString())
       const createdAt = String(o.createdAt || o.generatedAt || o.generated_at || new Date().toISOString())
 
-      const rawReps = Array.isArray(o.representatives) ? (o.representatives as Record<string, unknown>[]) : []
+      // From this device (representatives) or from the cloud (also stored as JSON text in representatives_json).
+      let cloudReps: unknown = []
+      if (!Array.isArray(o.representatives) && typeof o.representatives_json === 'string') { try { cloudReps = JSON.parse(o.representatives_json) } catch { cloudReps = [] } }
+      const rawReps = (Array.isArray(o.representatives) ? o.representatives : Array.isArray(cloudReps) ? cloudReps : []) as Record<string, unknown>[]
       const representatives = rawReps.map(r => ({
         name: String(r.name || '').trim(),
         phone: String(r.phone || '').trim()

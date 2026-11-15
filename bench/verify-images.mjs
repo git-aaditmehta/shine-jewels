@@ -319,6 +319,26 @@ const scenarios = {
   },
 
   // ---- Older iPadOS (no canvas inside workers): thumbnails are resized by the page instead. ----
+  // Sales demo PDF with many designs and full-size (2400px) photos: must finish without running out of memory.
+  async demo() {
+    const d = await device(), COUNT = 150
+    try {
+      await seed(d.context, { count: COUNT, cloudFraction: 0, variants: 6, detailSide: 2400 })
+      const page = await openApp(d.context, COUNT)
+      await complete(page, 180000)
+      await page.locator('.sales-demo-toggle-btn').click(); await sleep(300)
+      await page.getByRole('button', { name: /Select all/i }).first().click(); await sleep(300)
+      const t0 = Date.now()
+      await page.locator('.sales-demo-btn-primary').click()
+      const ok = await page.waitForSelector('.pdf-preview-embed', { timeout: 300000 }).then(() => true).catch(() => false)
+      const secs = (Date.now() - t0) / 1000
+      const info = ok ? await page.evaluate(async () => { const bytes = new Uint8Array(await (await fetch(document.querySelector('.pdf-preview-embed').src)).arrayBuffer()); const text = new TextDecoder('latin1').decode(bytes); return { mb: +(bytes.length / 1048576).toFixed(1), pages: (text.match(/\/Type\s*\/Page\b/g) || []).length, images: (text.match(/\/Subtype\s*\/Image/g) || []).length } }) : null
+      // The test photos repeat 6 pictures and the PDF stores an identical picture once, so pages (one per design) are counted.
+      check(`sales demo PDF with ${COUNT} designs (2400px photos) completes`, ok && info.pages >= COUNT, `${secs.toFixed(1)} s · ${JSON.stringify(info)}`)
+      check('sales demo PDF: photos are print-sized, not full-size (under 0.6 MB per picture)', ok && info.mb / Math.max(1, info.images) < 0.6, ok ? `${(info.mb / Math.max(1, info.images) * 1024).toFixed(0)} KB per picture` : '')
+    } finally { await d.close() }
+  },
+
   async fallback() {
     const d = await device({ 'sj.forceMainResize': '1' }), COUNT = 40
     try {

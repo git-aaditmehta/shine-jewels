@@ -32,6 +32,7 @@ import { isSignInError } from './api'
 import { imageStore } from './image-store'
 import { imageName } from './image-names'
 import { ImageSyncBadge, ImageSyncPanel, ProductThumb } from './StoredImage'
+import { HistoryView } from './HistoryView'
 import { createBothOrderPdfs, createSalesDemoPdfBlob, downloadPdfBlob, sharePdfFile, type GeneratedPdfResult } from './pdf'
 import { storage } from './storage'
 import type { Category, DeviceSession, Order, Product, Session, StaffUser, Subcategory, Vendor, VendorRepresentative } from './types'
@@ -221,6 +222,7 @@ export function App(){
    demoPdf?: GeneratedPdfResult
  } | null>(null)
  const [heldBackList,setHeldBackList]=useState<Product[]>([]),[unsentDesigns,setUnsentDesigns]=useState(0)
+ const [unusedPhotos,setUnusedPhotos]=useState<{count:number;bytes:number;keys:string[]}|null>(null),[photoCleanupBusy,setPhotoCleanupBusy]=useState(false)
  const [editingProduct,setEditingProduct]=useState<Product|null>(null),[deletingProduct,setDeletingProduct]=useState<Product|null>(null),[archivedProductsList,setArchivedProductsList]=useState<Product[]>([]),[adminProductTab,setAdminProductTab]=useState<'active'|'add'>('active'),[adminSearch,setAdminSearch]=useState('')
  const [editingVendor,setEditingVendor]=useState<Vendor|null>(null),[deletingVendor,setDeletingVendor]=useState<Vendor|null>(null),[adminVendorTab,setAdminVendorTab]=useState<'active'|'add'>('active'),[vendorSearch,setVendorSearch]=useState(''),[adminDeviceTab,setAdminDeviceTab]=useState<'active'|'staff'|'add_staff'|'all'>('active')
  const [staffList,setStaffList]=useState<StaffUser[]>([])
@@ -315,10 +317,15 @@ export function App(){
   const handleToggleStaffActive=async(staffId:string)=>{const token=getStoredToken();if(!token)return;try{const res=await workerApi<{id:string;is_active:number}>(`/staff/${staffId}/toggle-active`,{method:'POST',token});setNotice(res.is_active===1?'Staff account activated.':'Staff account suspended and active sessions revoked.');await loadStaff();await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Failed to update staff status')}}
   const handleResetStaffPassword=async(e:React.FormEvent)=>{e.preventDefault();if(!resetPasswordStaff)return;const token=getStoredToken();if(!token)return;if(newResetPasswordValue.trim().length<4){setNotice('New password must be at least 4 characters.');return}setStaffActionSubmitting(true);try{await workerApi(`/staff/${resetPasswordStaff.id}/reset-password`,{method:'POST',token,body:{password:newResetPasswordValue.trim()}});setNotice(`Password updated successfully for @${resetPasswordStaff.username}.`);setResetPasswordStaff(null);setNewResetPasswordValue('')}catch(err){setNotice(err instanceof Error?err.message:'Failed to reset password')}finally{setStaffActionSubmitting(false)}}
   const handleDeleteStaff=async(staff:StaffUser)=>{if(!window.confirm(`Are you sure you want to permanently remove staff account "@${staff.username}"? Any active sessions will be terminated.`)){return}const token=getStoredToken();if(!token)return;try{await workerApi(`/staff/${staff.id}`,{method:'DELETE',token});setNotice(`Staff account "@${staff.username}" removed.`);await loadStaff();await loadDevices()}catch(err){setNotice(err instanceof Error?err.message:'Failed to remove staff account')}}
-  const triggerSync=async()=>{const token=getStoredToken();if(!token||syncing||!navigator.onLine)return;setSyncing(true);try{const res=await synchronize(token,msg=>setNotice(msg));await load();await loadCloudStorage();setNotice(res.synced?`Sync complete: ${res.uploaded} uploaded, ${res.pulled} change(s) synced.${res.heldBack?` ${res.heldBack} design(s) kept on this device because the cloud already has a different design with the same code — see the Storage tab.`:''}`:'Device is offline.')}catch(err){if(isSignInError(err)){await load();setNotice('This iPad is signed out of the cloud, so nothing can sync. Log out and sign in again — every design, photo and order on this iPad is kept and uploads afterwards.')}else setNotice(err instanceof Error?`Sync failed: ${err.message}`:'Sync failed.')}finally{setSyncing(false)}}
+  const triggerSync=async(full=false)=>{const token=getStoredToken();if(!token||syncing||!navigator.onLine)return;setSyncing(true);try{const res=await synchronize(token,msg=>setNotice(msg),{full});await load();await loadCloudStorage();setNotice(res.synced?`Sync complete: ${res.uploaded} uploaded, ${res.pulled} change(s) synced.${res.heldBack?` ${res.heldBack} design(s) kept on this device because the cloud already has a different design with the same code — see the Storage tab.`:''}`:'Device is offline.')}catch(err){if(isSignInError(err)){await load();setNotice('This iPad is signed out of the cloud, so nothing can sync. Log out and sign in again — every design, photo and order on this iPad is kept and uploads afterwards.')}else setNotice(err instanceof Error?`Sync failed: ${err.message}`:'Sync failed.')}finally{setSyncing(false)}}
+  // Admin: one-time clean-up of cloud photo files no design uses (left behind by photo replacements). Shows the list
+  // first; deletes only what was shown, after the admin confirms. The cloud re-checks every file before deleting it.
+  const findUnusedPhotos=async()=>{const token=getStoredToken();if(!token||photoCleanupBusy)return;setPhotoCleanupBusy(true);try{const r=await workerApi<{count:number;bytes:number;keys:string[]}>('/admin/unused-images',{token});setUnusedPhotos(r);setNotice(r.count?`${r.count} unused photo file(s) found in the cloud (${(r.bytes/1048576).toFixed(1)} MB). Nothing has been deleted.`:'No unused photo files in the cloud.')}catch(err){setNotice(err instanceof Error?`Could not check cloud photos: ${err.message}`:'Could not check cloud photos.')}finally{setPhotoCleanupBusy(false)}}
+  const deleteUnusedPhotos=async()=>{const token=getStoredToken();if(!token||!unusedPhotos?.count||photoCleanupBusy)return;if(!window.confirm(`Permanently delete ${unusedPhotos.count} photo file(s) (${(unusedPhotos.bytes/1048576).toFixed(1)} MB) from cloud storage?\n\nNo design uses them. This cannot be undone.`))return;setPhotoCleanupBusy(true);try{const r=await workerApi<{deleted:number}>('/admin/unused-images',{method:'POST',token,body:{keys:unusedPhotos.keys}});setUnusedPhotos(null);setNotice(`${r.deleted} unused photo file(s) deleted from cloud storage.`)}catch(err){setNotice(err instanceof Error?`Clean-up failed: ${err.message}`:'Clean-up failed.')}finally{setPhotoCleanupBusy(false)}}
   const triggerImageRecovery=async()=>{if(recovering)return;setRecovering(true);try{setNotice('Checking every photo on this device…');await imageStore.rescan();setNotice('Photo check started. Anything missing or damaged is downloaded again — progress is shown below.')}finally{setRecovering(false)}}
   const uploadImages=async()=>{const token=getStoredToken();if(!token||uploading)return;setUploading(true);try{const result=await uploadPendingProductImages(token);await load();await loadCloudStorage();setNotice(result.failed?`${result.uploaded} product image upload(s) completed; ${result.failed} remain queued.`:`${result.uploaded} product image upload(s) completed to R2.`)}catch(error){setNotice(error instanceof Error?`Image upload failed: ${error.message}`:'Image upload failed. Local images remain intact.')}finally{setUploading(false)}}
   const handleResetLocalData=async()=>{
+    if(session?.role!=='ADMIN'){setNotice('Only the admin can wipe this device.');return}
     // Second, louder warning when the wipe would destroy work that exists only on this iPad.
     const [unsent,queued]=await Promise.all([storage.unsentDesignCount(),storage.pendingOperationCount()])
     if((unsent>0||queued>0)&&!window.confirm(`🛑 STOP — this iPad has work that is NOT in the cloud yet.\n\n• ${unsent} design(s) not uploaded\n• ${queued} change(s) waiting to upload\n\nWiping deletes them permanently. They cannot be recovered from the cloud.\n\nPress Cancel unless you are absolutely sure.`))return
@@ -611,6 +618,7 @@ export function App(){
    }catch(err){setNotice(err instanceof Error?`Failed to update design: ${err.message}`:'Failed to update design.')}
   }
   const handleConfirmDelete=async(product:Product)=>{
+   if(session?.role!=='ADMIN'){setNotice('Only the admin can delete designs.');return}
    try{
     await storage.deleteProduct(product.id)
     await load()
@@ -659,6 +667,7 @@ export function App(){
     }
   }
   const handleDeleteVendor = async (vendor: Vendor) => {
+   if(session?.role!=='ADMIN'){setNotice('Only the admin can delete vendors.');return}
    try {
      await storage.deleteVendor(vendor.id)
      await load()
@@ -690,6 +699,7 @@ export function App(){
    }
   }
   const handleDeleteCategory = async (id: string) => {
+   if(session?.role!=='ADMIN'){setNotice('Only the admin can delete categories.');return}
    try {
      const res = await storage.deleteCategory(id)
      if (!res.ok) {
@@ -725,6 +735,7 @@ export function App(){
    }
   }
   const handleDeleteSubcategory = async (id: string) => {
+   if(session?.role!=='ADMIN'){setNotice('Only the admin can delete subcategories.');return}
    try {
      const res = await storage.deleteSubcategory(id)
      if (!res.ok) {
@@ -775,6 +786,8 @@ export function App(){
   }, [view])
 
  if(!session) return <Login onSession={setSession} />
+/** Only the admin may delete anything, clear the upload queue or wipe the device (the cloud enforces the same rule). */
+ const isAdmin=session.role==='ADMIN'
  const commonViews:View[]=['catalogue','history','vendors','products','batch','taxonomy','storage']
  const views=(session.role==='ADMIN'?[...commonViews,'devices']:commonViews) as View[]
   const logout=()=>{sessionStorage.removeItem(sessionKey);localStorage.removeItem(sessionKey);void storage.clearSession();setSession(null)}
@@ -1107,14 +1120,14 @@ export function App(){
            >
             ✏️ Edit
            </button>
-           <button
+           {isAdmin&&<button
             type="button"
             className="quiet"
             style={{minHeight:'36px',padding:'0 14px',fontSize:'12px',color:'var(--danger)',borderColor:'var(--danger)'}}
             onClick={()=>setDeletingVendor(v)}
            >
             🗑️ Delete
-           </button>
+           </button>}
           </div>
          </div>
         ))}
@@ -1212,14 +1225,14 @@ export function App(){
             >
              ✏️ Edit
             </button>
-            <button
+            {isAdmin&&<button
              type="button"
              className="quiet"
              style={{minHeight:'36px',padding:'0 12px',fontSize:'12px',color:'var(--danger)',borderColor:'var(--danger)'}}
              onClick={()=>setDeletingProduct(p)}
             >
              🗑️ Delete
-            </button>
+            </button>}
            </div>
           </div>
          )
@@ -1241,69 +1254,15 @@ export function App(){
      onSubcategory={addSubcategory}
      onUpdateCategory={handleUpdateCategory}
      onUpdateSubcategory={handleUpdateSubcategory}
+     canDelete={session.role==='ADMIN'}
      onDeleteCategory={handleDeleteCategory}
      onDeleteSubcategory={handleDeleteSubcategory}
      notice={setNotice}
     />
    </main>
   )}
-  {view==='history'&&(
-   <main className="single-view">
-    <p className="eyebrow">synchronized history</p>
-    <h1>Orders retain their original details.</h1>
-    <div className="history">
-     {orders.length ? (
-      orders.map(o => {
-       const vObj = (o.vendor as Partial<Vendor> | undefined) || {}
-       const raw = o as unknown as Record<string, unknown>
-       const vendorName = String(vObj.name || raw.vendor_name_snapshot || raw.vendorName || 'Vendor')
-       const orderNum = Number(o.orderNumber || raw.order_number || 0)
-       const items = Array.isArray(o.items) ? o.items : []
-       const totalQty = items.reduce((n, i) => n + (i.quantity || 0), 0)
-       const totalWeight = items.reduce((n, i) => n + (i.weightMg || 0) * (i.quantity || 1), 0)
-       const dateStr = new Date(o.generatedAt || o.createdAt || (raw.generated_at as string) || Date.now()).toLocaleString()
-       const salesStr = String(o.salesperson || raw.salesperson_id || 'Salesperson')
-
-       return (
-        <article key={o.id}>
-         <div>
-          <strong>#{String(orderNum).padStart(4, '0')} · {vendorName}</strong>
-          <span>{dateStr} · {salesStr}</span>
-         </div>
-         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <b>{totalQty} pcs · {grams(totalWeight)} g</b>
-          <button
-           type="button"
-           className="quiet"
-           style={{ minHeight: '32px', padding: '0 10px', fontSize: '12px' }}
-           onClick={() => void openOrderPdfPreview(o)}
-           disabled={generatingPdf}
-          >
-           {generatingPdf ? 'Generating…' : 'Preview & Export PDF'}
-          </button>
-         </div>
-         <details>
-          <summary>View design snapshots ({items.length})</summary>
-          {items.length ? (
-           items.map((i, idx) => (
-            <p key={i.productId || idx}>
-             {i.designCode || 'Design'} · {i.category || ''}{i.subcategory ? `/${i.subcategory}` : ''} · {i.quantity || 1} × {grams(i.weightMg || 0)} g
-            </p>
-           ))
-          ) : (
-           <p className="muted" style={{ padding: '4px 0' }}>Order summary synchronized from cloud.</p>
-          )}
-         </details>
-        </article>
-       )
-      })
-     ) : (
-      <p className="muted">No finalized orders on this device yet.</p>
-     )}
-    </div>
-   </main>
-  )}
-  {view==='storage'&&<main className="single-view storage"><div className="section-title"><div><p className="eyebrow">device replica</p><h1>Storage &amp; synchronization</h1></div><span>Checkpoint #{syncCheckpointVal}</span></div><div className="storage-card"><strong>{cloudBytes===null?'—':(cloudBytes/(1024*1024)).toFixed(2)+' MB'}</strong><span>Cloud R2 catalogue images</span><p>Calculated from the authenticated organization’s confirmed grid/detail image metadata. This is the cloud catalogue total, not a browser cache estimate.</p><ImageSyncPanel/><div style={{display:'flex',gap:'10px',alignItems:'center',padding:'8px 0'}}><span>Offline queue:</span><strong>{pendingCount} operation(s) pending sync</strong>{pendingCount>0&&<button className="quiet" style={{minHeight:'28px',padding:'0 8px',fontSize:'12px'}} onClick={async()=>{if(!window.confirm(`⚠️ Clear the upload queue?\n\n${pendingCount} change(s) on this iPad have not reached the cloud yet. Clearing the queue means they will never be uploaded (designs stay on this iPad only).\n\nOnly do this if you are sure.`))return;await storage.clearPendingOperations();await load();setNotice('Pending operations queue cleared.')}}>Clear queue</button>}</div>{unsentDesigns>0&&<p className="unsent-note">{unsentDesigns} design(s) on this iPad are not in the cloud yet. They upload automatically whenever the iPad is online{heldBackList.length?` (except the ${heldBackList.length} kept below)`:''}.</p>}{heldBackList.length>0&&<div className="held-back"><strong>Kept on this iPad only — {heldBackList.length} design(s)</strong><p>The cloud already has a different design with the same code, so these were not uploaded (uploading would replace the cloud design). Nothing has been deleted; decide later what to do with each.</p><ul>{heldBackList.map(p=><li key={p.id}><ProductThumb product={p} alt={p.designCode}/><span><b>{p.designCode}</b>{p.heldBack?.at?` · held ${new Date(p.heldBack.at).toLocaleDateString()}`:''}</span></li>)}</ul></div>}<button className="primary" disabled={syncing||!online} onClick={()=>void triggerSync()}>{syncing?'Synchronizing…':'Run Full Synchronization'}</button><button className="quiet" disabled={recovering} onClick={()=>void triggerImageRecovery()}>{recovering?'Checking photos…':'Check & Repair Photos on This Device'}</button><button className="quiet" disabled={uploading||!online} onClick={()=>void uploadImages()}>{uploading?'Uploading pending images…':'Upload pending product images'}</button><button className="quiet" onClick={()=>{void load();void loadCloudStorage()}}>Refresh storage estimate</button><button className="quiet" style={{marginTop:'4px'}} onClick={async()=>{if('caches' in window){const k=await caches.keys();await Promise.all(k.map(n=>caches.delete(n)))};if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()))};window.location.reload()}}>Force Reload &amp; Update App</button><div style={{marginTop:'20px',paddingTop:'16px',borderTop:'1px dashed var(--danger,#983b32)'}}><strong style={{color:'var(--danger,#983b32)',fontSize:'13px',display:'block',marginBottom:'4px'}}>⚠️ Clean Handover Tool (Temporary)</strong><p style={{fontSize:'12px',color:'var(--muted)',margin:'0 0 10px'}}>Wipes all local test products, categories, vendors, and orders cached on this device so the client starts completely fresh. <strong>Your Admin login session is preserved.</strong></p><button type="button" className="quiet" style={{minHeight:'42px',width:'100%',color:'#fff',background:'var(--danger,#983b32)',borderColor:'var(--danger,#983b32)',fontWeight:700,fontSize:'13px',borderRadius:'8px'}} onClick={handleResetLocalData}>🗑️ Wipe Local Device Data (Keep Admin Logged In)</button></div></div></main>}
+  {view==='history'&&<HistoryView orders={orders} generatingPdf={generatingPdf} onPreview={o=>void openOrderPdfPreview(o)}/>}
+  {view==='storage'&&<main className="single-view storage"><div className="section-title"><div><p className="eyebrow">device replica</p><h1>Storage &amp; synchronization</h1></div><span>Checkpoint #{syncCheckpointVal}</span></div><div className="storage-card"><strong>{cloudBytes===null?'—':(cloudBytes/(1024*1024)).toFixed(2)+' MB'}</strong><span>Cloud R2 catalogue images</span><p>Calculated from the authenticated organization’s confirmed grid/detail image metadata. This is the cloud catalogue total, not a browser cache estimate.</p><ImageSyncPanel/><div style={{display:'flex',gap:'10px',alignItems:'center',padding:'8px 0'}}><span>Offline queue:</span><strong>{pendingCount} operation(s) pending sync</strong>{pendingCount>0&&isAdmin&&<button className="quiet" style={{minHeight:'28px',padding:'0 8px',fontSize:'12px'}} onClick={async()=>{if(!window.confirm(`⚠️ Clear the upload queue?\n\n${pendingCount} change(s) on this iPad have not reached the cloud yet. Clearing the queue means they will never be uploaded (designs stay on this iPad only).\n\nOnly do this if you are sure.`))return;await storage.clearPendingOperations();await load();setNotice('Pending operations queue cleared.')}}>Clear queue</button>}</div>{unsentDesigns>0&&<p className="unsent-note">{unsentDesigns} design(s) on this iPad are not in the cloud yet. They upload automatically whenever the iPad is online{heldBackList.length?` (except the ${heldBackList.length} kept below)`:''}.</p>}{heldBackList.length>0&&<div className="held-back"><strong>Kept on this iPad only — {heldBackList.length} design(s)</strong><p>The cloud already has a different design with the same code, so these were not uploaded (uploading would replace the cloud design). Nothing has been deleted; decide later what to do with each.</p><ul>{heldBackList.map(p=><li key={p.id}><ProductThumb product={p} alt={p.designCode}/><span><b>{p.designCode}</b>{p.heldBack?.at?` · held ${new Date(p.heldBack.at).toLocaleDateString()}`:''}</span></li>)}</ul></div>}<button className="primary" disabled={syncing||!online} onClick={()=>void triggerSync(true)}>{syncing?'Synchronizing…':'Run Full Synchronization'}</button><button className="quiet" disabled={recovering} onClick={()=>void triggerImageRecovery()}>{recovering?'Checking photos…':'Check & Repair Photos on This Device'}</button><button className="quiet" disabled={uploading||!online} onClick={()=>void uploadImages()}>{uploading?'Uploading pending images…':'Upload pending product images'}</button><button className="quiet" onClick={()=>{void load();void loadCloudStorage()}}>Refresh storage estimate</button>{isAdmin&&<div className="photo-cleanup"><strong>Unused photos in cloud storage</strong><p>Photos left behind when a design's photo was replaced earlier. Check first — nothing is deleted until you confirm.</p><button className="quiet" disabled={photoCleanupBusy||!online} onClick={()=>void findUnusedPhotos()}>{photoCleanupBusy&&!unusedPhotos?'Checking…':'Check for unused photos'}</button>{unusedPhotos&&(unusedPhotos.count>0?<button className="quiet danger-outline" disabled={photoCleanupBusy||!online} onClick={()=>void deleteUnusedPhotos()}>{photoCleanupBusy?'Deleting…':`Delete ${unusedPhotos.count} unused file(s) · ${(unusedPhotos.bytes/1048576).toFixed(1)} MB`}</button>:<span className="muted">Nothing to clean up.</span>)}</div>}<button className="quiet" style={{marginTop:'4px'}} onClick={async()=>{if('caches' in window){const k=await caches.keys();await Promise.all(k.map(n=>caches.delete(n)))};if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(r=>r.unregister()))};window.location.reload()}}>Force Reload &amp; Update App</button>{isAdmin&&<div style={{marginTop:'20px',paddingTop:'16px',borderTop:'1px dashed var(--danger,#983b32)'}}><strong style={{color:'var(--danger,#983b32)',fontSize:'13px',display:'block',marginBottom:'4px'}}>⚠️ Clean Handover Tool (Temporary)</strong><p style={{fontSize:'12px',color:'var(--muted)',margin:'0 0 10px'}}>Wipes all local test products, categories, vendors, and orders cached on this device so the client starts completely fresh. <strong>Your Admin login session is preserved.</strong></p><button type="button" className="quiet" style={{minHeight:'42px',width:'100%',color:'#fff',background:'var(--danger,#983b32)',borderColor:'var(--danger,#983b32)',fontWeight:700,fontSize:'13px',borderRadius:'8px'}} onClick={handleResetLocalData}>🗑️ Wipe Local Device Data (Keep Admin Logged In)</button></div>}</div></main>}
  {view==='devices'&&session.role==='ADMIN'&&(
   <main className="single-view">
    <div className="section-title">

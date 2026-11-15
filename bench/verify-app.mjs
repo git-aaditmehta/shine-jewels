@@ -97,9 +97,19 @@ const scenarios = {
       const ok = await page.waitForFunction(() => document.body.innerText.includes('1 designs'), null, { timeout: 300000 }).then(() => true).catch(() => false)
       const ms = Date.now() - t0
       await page.getByRole('navigation').getByRole('button', { name: 'history', exact: true }).click(); await sleep(800)
-      const shown = await page.evaluate(() => (document.body.innerText.match(/#\d+/g) || []).length)
+      const label = await page.evaluate(() => document.querySelector('.single-view .section-title > span')?.textContent || '')
+      const rendered = await page.evaluate(() => document.querySelectorAll('.history-row').length)
       check(`first download with ${ORDERS} past orders and ${VENDORS} vendors finishes in under 10 seconds`, ok && ms < 10000, `${(ms / 1000).toFixed(1)} s`)
-      check('every past order is kept', shown >= ORDERS || shown === 0, `${shown} order numbers visible`)
+      check('every past order is kept', label.startsWith(`${ORDERS} orders`), label)
+      check('history draws only the orders on screen (smooth with thousands)', rendered > 0 && rendered < 60, `${rendered} rows in the page`)
+      await page.getByPlaceholder(/Order no\., vendor/).fill('#1234')
+      await sleep(300)
+      const found = await page.evaluate(() => [...document.querySelectorAll('.history-row strong')].map(e => e.textContent))
+      check('history search finds an order by number', found.length >= 1 && found[0].startsWith('#1234'), found.slice(0, 3).join(' | '))
+      await page.getByPlaceholder(/Order no\., vendor/).fill('Vendor 299')
+      await sleep(300)
+      const byVendor = await page.evaluate(() => document.querySelector('.single-view .section-title > span')?.textContent || '')
+      check('history search by vendor shows exactly that vendor\'s orders', /^10 of 3000 orders/.test(byVendor), byVendor)
     } finally { cloud.bootstrap = null; await d.close() }
   },
 
@@ -116,11 +126,14 @@ const scenarios = {
       const selects = page.locator('.grid .product .select')
       await selects.nth(0).click(); await selects.nth(1).click()
       await page.locator('.order-tray select').first().selectOption({ index: 1 })
+      await page.getByLabel('Representative 1 name').fill('Ramesh Shah')
       await page.locator('.order-tray .primary').click()
       await page.waitForSelector('.pdf-preview-embed', { timeout: 60000 })
       await page.getByRole('button', { name: 'Close PDF preview' }).click(); await sleep(400)
       // Meanwhile the other iPad's order #1 reached the cloud.
-      cloud.history = [{ id: 'other-ipad-order', order_number: 1, status: 'FINALIZED', vendor_name_snapshot: 'Other Vendor', vendor_address_snapshot: 'x', vendor_city_snapshot: 'Pune', vendor_type_snapshot: 'RETAIL', generated_at: '2026-11-12T10:00:00Z', items: [{ product_id: 'bench-00005', design_code_snapshot: 'SW 6', quantity: 2, serial_number: 1 }] }]
+      const other = { id: 'other-ipad-order', order_number: 1, status: 'FINALIZED', vendor_name_snapshot: 'Other Vendor', vendor_address_snapshot: 'x', vendor_city_snapshot: 'Pune', vendor_type_snapshot: 'RETAIL', generated_at: '2026-11-12T10:00:00Z', items: [{ product_id: 'bench-00005', design_code_snapshot: 'SW 6', quantity: 2, serial_number: 1 }] }
+      cloud.history = [other]
+      cloud.changes = [{ sequence_number: 2, entity_type: 'presentation', entity_id: other.id, operation: 'FINALIZE', payload: JSON.stringify(other) }]
       // Back online, but the cloud rejects this order once (temporary server problem) while the other order comes down.
       cloud.mode = 'ok'; cloud.rejectOrders = true
       await page.getByRole('navigation').getByRole('button', { name: 'history', exact: true }).click()
@@ -139,7 +152,9 @@ const scenarios = {
       await page.getByRole('navigation').getByRole('button', { name: 'history', exact: true }).click(); await sleep(1500)
       const after = await page.evaluate(() => document.body.innerText)
       check('order clash: both orders are still there after restarting the app', /Bench Jewellers/.test(after) && /Other Vendor/.test(after))
-    } finally { cloud.mode = 'ok'; cloud.history = []; cloud.rejectOrders = false; await d.close() }
+      check('representative is sent to the cloud with the order', cloud.orderPosts[0]?.representatives?.[0]?.name === 'Ramesh Shah', JSON.stringify(cloud.orderPosts[0]?.representatives))
+      check('representative is still on the order after upload and restart', /Rep: Ramesh Shah/.test(after))
+    } finally { cloud.mode = 'ok'; cloud.history = []; cloud.changes = []; cloud.rejectOrders = false; await d.close() }
   },
 
   // The client iPad's situation: designs made while signed out, whose failed uploads an older app erased, so they sit on
@@ -180,6 +195,59 @@ const scenarios = {
       check('after restart: nothing is uploaded again and all designs are still on the device', cloud.productPosts.length === before, `${cloud.productPosts.length - before} re-uploads`)
       check('after restart: the held-back design is still kept and still not uploaded', /Kept on this iPad only — 1 design/.test(after) && !cloud.productPosts.some(p => p.designCode === 'SW 150'))
     } finally { cloud.signedOut = false; cloud.codes = new Map(); await d.close() }
+  },
+
+  // Staff (salesperson) accounts cannot delete anything, clear the upload queue or wipe the device.
+  async staff() {
+    const d = await device()
+    try {
+      await seed(d.context, { count: 20, cloudFraction: 0, variants: 4, detailSide: 400 })
+      const staff = JSON.stringify({ ...JSON.parse(SESSION), role: 'SALESPERSON', displayName: 'Staff' })
+      await d.context.addInitScript(s => { localStorage.setItem('shine-jewels.session', s); sessionStorage.setItem('shine-jewels.session', s) }, staff)
+      const page = await d.context.newPage(); await page.goto(ORIGIN)
+      await page.waitForFunction(() => document.body.innerText.includes('20 designs'), null, { timeout: 30000 }); await sleep(800)
+      const count = async () => page.evaluate(() => [...document.querySelectorAll('button')].filter(b => /Delete|🗑️|Wipe|Clear queue/.test(b.textContent || '')).length)
+      const found = {}
+      for (const tab of ['products', 'vendors', 'taxonomy', 'storage']) { await page.getByRole('navigation').getByRole('button', { name: tab, exact: true }).click(); await sleep(500); found[tab] = await count() }
+      check('staff: no delete, wipe or clear-queue buttons anywhere', Object.values(found).every(n => n === 0), JSON.stringify(found))
+      const editable = await page.getByRole('navigation').getByRole('button', { name: 'products', exact: true }).click().then(() => sleep(400)).then(() => page.getByRole('button', { name: '✏️ Edit' }).count())
+      check('staff: can still edit designs', editable > 0, `${editable} edit buttons`)
+    } finally { await d.close() }
+  },
+
+  // Deleting a category that has no designs but has subcategories: warning lists them, owner must approve.
+  async category() {
+    const d = await device()
+    try {
+      await seed(d.context, { count: 20, cloudFraction: 0, variants: 4, detailSide: 400 })
+      await d.context.addInitScript(s => { localStorage.setItem('shine-jewels.session', s); sessionStorage.setItem('shine-jewels.session', s) }, SESSION)
+      const page = await d.context.newPage(); await page.goto(ORIGIN)
+      await page.waitForFunction(() => document.body.innerText.includes('20 designs'), null, { timeout: 30000 }); await sleep(800)
+      // Make an empty category with two empty subcategories through the Add screen.
+      await page.getByRole('navigation').getByRole('button', { name: 'taxonomy', exact: true }).click(); await sleep(400)
+      await page.getByRole('button', { name: '+ Add Category / Subcategory' }).click(); await sleep(200)
+      const forms = page.locator('form.entry-form')
+      await forms.nth(0).locator('input[name=name]').fill('Test Empty'); await forms.nth(0).getByRole('button', { name: 'Add Category' }).click(); await sleep(600)
+      for (const name of ['Sub A', 'Sub B']) {
+        await forms.nth(1).locator('select').selectOption({ label: 'Test Empty' }); await forms.nth(1).locator('input[name=name]').fill(name); await forms.nth(1).getByRole('button', { name: 'Add Subcategory' }).click(); await sleep(600)
+      }
+      await page.getByRole('button', { name: /Active Taxonomy/ }).click(); await sleep(400)
+      // Category with designs: blocked with the design count.
+      await page.locator('.admin-taxonomy-card').filter({ hasText: 'Necklace' }).first().getByRole('button', { name: '🗑️ Delete' }).click(); await sleep(300)
+      const blocked = await page.evaluate(() => document.querySelector('[aria-label="Delete Category"]')?.textContent || '')
+      check('category with designs: delete blocked with the number of designs', /can't be deleted because it has \d+ design/.test(blocked), blocked.slice(0, 120))
+      await page.getByRole('button', { name: 'Understood' }).click(); await sleep(200)
+      await page.locator('.admin-taxonomy-card').filter({ hasText: 'Test Empty' }).first().getByRole('button', { name: '🗑️ Delete' }).click(); await sleep(300)
+      const modal = page.locator('[aria-label="Delete Category"]')
+      const text = await modal.textContent()
+      const disabledBefore = await modal.getByRole('button', { name: /Delete Category/ }).isDisabled()
+      check('empty category: warning lists the subcategories that will also be deleted', /2 subcategories inside it will also be deleted/.test(text) && /Sub A/.test(text) && /Sub B/.test(text), text.slice(0, 160))
+      check('empty category: delete stays disabled until the owner approves', disabledBefore)
+      cloud.deletes = []
+      await modal.locator('input[type=checkbox]').check(); await modal.getByRole('button', { name: /Delete Category/ }).click(); await sleep(1500)
+      const after = await page.evaluate(() => document.body.innerText)
+      check('empty category: category and its subcategories are gone', !/Test Empty/.test(after) && !/Sub A/.test(after), cloud.deletes.join(' ; '))
+    } finally { await d.close() }
   },
 
   // 10,000 designs, details only (no photo files) — measures catalogue load and background sync.

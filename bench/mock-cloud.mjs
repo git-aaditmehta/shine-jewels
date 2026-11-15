@@ -13,6 +13,8 @@ export async function startMockCloud({ latencyMs = 0 } = {}) {
     gridVariants: [], detailVariants: [], bootstrap: null, history: [], orderPosts: [], rejectOrders: false,
     /** signedOut: every API call except sign-in gets 401. codes: design code (lower case) → id of a design already in the cloud. */
     signedOut: false, codes: new Map(), productPosts: [],
+    /** Change feed entries ({ sequence_number, entity_type, entity_id, operation, payload }) served by /sync/changes. */
+    changes: [], deletes: [],
     setVariants(seed) { cloud.gridVariants = seed.gridVariants.map(b => Buffer.from(b, 'base64')); cloud.detailVariants = seed.detailVariants.map(b => Buffer.from(b, 'base64')) },
     close: () => new Promise(resolve => { server.closeAllConnections?.(); server.close(resolve) })
   }
@@ -54,8 +56,10 @@ export async function startMockCloud({ latencyMs = 0 } = {}) {
       if (route === '/history') return json(res, cloud.history.map(o => ({ id: o.id, order_number: o.order_number })))
       if (route.startsWith('/orders/') && req.method === 'GET') { const o = cloud.history.find(x => x.id === route.slice(8)); return o ? json(res, { presentation: o, items: o.items || [] }) : json(res, { error: 'Order not found.' }, 404) }
       if (route === '/orders' && req.method === 'POST' && cloud.rejectOrders) return json(res, { error: 'Temporary server problem.' }, 500)
-      if (route === '/orders' && req.method === 'POST') { cloud.orderPosts.push(payload); return json(res, { id: payload.id, order_number: 900 + cloud.orderPosts.length, status: 'FINALIZED', vendor_name_snapshot: 'Bench Jewellers', vendor_address_snapshot: '1 Test Road', vendor_city_snapshot: 'Mumbai', vendor_type_snapshot: 'WHOLESALE', items: payload.items }) }
-      if (route.startsWith('/sync/changes') || ['/devices', '/staff'].includes(route)) return json(res, [])
+      if (route === '/orders' && req.method === 'POST') { cloud.orderPosts.push(payload); return json(res, { id: payload.id, order_number: 900 + cloud.orderPosts.length, status: 'FINALIZED', representatives: payload.representatives || [], vendor_name_snapshot: 'Bench Jewellers', vendor_address_snapshot: '1 Test Road', vendor_city_snapshot: 'Mumbai', vendor_type_snapshot: 'WHOLESALE', items: payload.items }) }
+      if (route.startsWith('/sync/changes')) { const after = Number(url.searchParams.get('after') || 0); return json(res, cloud.changes.filter(c => c.sequence_number > after)) }
+      if (['/devices', '/staff'].includes(route)) return json(res, [])
+      if (req.method === 'DELETE') { cloud.deletes.push(route); return json(res, { ok: true }) }
       if (route === '/categories' || route === '/subcategories') return json(res, { ...payload, category_id: payload?.categoryId })
       if (route === '/images/upload-authorizations') {
         const key = `bench/products/${payload.productId}/v${payload.imageVersion}/${payload.representation}`

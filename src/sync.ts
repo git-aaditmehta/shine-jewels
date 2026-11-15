@@ -171,7 +171,7 @@ export async function uploadProductOnline(token: string, productId: string): Pro
   const res = await workerApi<Product & { id: string }>('/products', {
     method: 'POST',
     token,
-    body: { id: finalItem.id, designCode: finalItem.designCode, categoryId: finalItem.categoryId, subcategoryId: finalItem.subcategoryId, weightMg: finalItem.weightMg, gridImage, detailImage }
+    body: { id: finalItem.id, designCode: finalItem.designCode, categoryId: finalItem.categoryId, subcategoryId: finalItem.subcategoryId, weightMg: finalItem.weightMg, imageVersion: finalItem.imageVersion || 1, gridImage, detailImage }
   })
   const savedProd: Product = {
     ...finalItem,
@@ -242,7 +242,7 @@ export async function push(token: string, operation: Awaited<ReturnType<typeof s
   }
   if (operation.entity_type === 'presentation') {
     const order = payload as unknown as { id: string; orderNumber?: number; vendor: { id: string }; items: { productId: string; quantity: number; remark: string }[] }
-    const res = await workerApi<Record<string, unknown>>('/orders', { method: 'POST', token, body: { id: order.id, vendorId: order.vendor.id, items: order.items.map(item => ({ productId: item.productId, quantity: item.quantity, remark: item.remark })) } })
+    const res = await workerApi<Record<string, unknown>>('/orders', { method: 'POST', token, body: { id: order.id, vendorId: order.vendor.id, representatives: (order as { representatives?: unknown }).representatives || [], items: order.items.map(item => ({ productId: item.productId, quantity: item.quantity, remark: item.remark })) } })
     if (res && res.id) {
       if (res.id !== order.id) {
         await storage.remapOrderId(order.id, String(res.id), res)
@@ -314,7 +314,13 @@ export function cloudImageStorageBytes(products: Product[]) {
   return products.filter(product => !product.deleted && product.gridImageKey).reduce((total, product) => total + Number(product.gridImageSizeBytes || 0) + Number(product.detailImageSizeBytes || 0), 0)
 }
 
-export async function synchronize(token: string, onProgress?: (msg: string) => void) {
+/**
+ * Uploads waiting changes, then downloads only what changed in the cloud since this device's checkpoint.
+ * `full` (the "Run Full Synchronization" button) also cross-checks this device's orders against the cloud's order list;
+ * routine syncs skip that, because new orders already arrive through the change feed and the cross-check made every
+ * sync read the whole order history in the cloud database.
+ */
+export async function synchronize(token: string, onProgress?: (msg: string) => void, options: { full?: boolean } = {}) {
   if (!navigator.onLine) return { synced: false, reason: 'offline' }
 
   // 1. Push offline queued operations
@@ -387,8 +393,8 @@ export async function synchronize(token: string, onProgress?: (msg: string) => v
     if (changes.length < 500) break
   }
 
-  // 3. Ensure historical orders are synced
-  await syncHistoryOrders(token)
+  // 3. Full sync only: make sure every recent cloud order is on this device with its items.
+  if (options.full) await syncHistoryOrders(token)
 
   // 4. Photos: nothing to do here. The image downloader compares the catalogue with the files on this device after
   //    every reload of the product list and fetches whatever is new, replaced or missing.

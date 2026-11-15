@@ -271,6 +271,8 @@ export interface TaxonomyProps {
   onSubcategory: (s: Subcategory) => Promise<void>
   onUpdateCategory: (c: Category) => Promise<void>
   onUpdateSubcategory: (s: Subcategory) => Promise<void>
+  /** Only the admin sees delete buttons. */
+  canDelete: boolean
   onDeleteCategory: (id: string) => Promise<void>
   onDeleteSubcategory: (id: string) => Promise<void>
   notice: (s: string) => void
@@ -284,6 +286,7 @@ export function Taxonomy({
   onSubcategory,
   onUpdateCategory,
   onUpdateSubcategory,
+  canDelete,
   onDeleteCategory,
   onDeleteSubcategory,
   notice
@@ -292,7 +295,7 @@ export function Taxonomy({
   const [search, setSearch] = useState('')
 
   const [editingCategory, setEditingCategory] = useState<Category | null>(null)
-  const [deletingCategoryState, setDeletingCategoryState] = useState<{ category: Category; productCount: number } | null>(null)
+  const [deletingCategoryState, setDeletingCategoryState] = useState<{ category: Category; productCount: number; subcategoryNames: string[] } | null>(null)
 
   const [editingSubcategory, setEditingSubcategory] = useState<Subcategory | null>(null)
   const [deletingSubcategoryState, setDeletingSubcategoryState] = useState<{ subcategory: Subcategory; productCount: number } | null>(null)
@@ -300,8 +303,10 @@ export function Taxonomy({
   const activeProducts = products.filter(p => !p.deleted)
 
   const handleStartDeleteCategory = (cat: Category) => {
-    const referencing = activeProducts.filter(p => p.categoryId === cat.id).length
-    setDeletingCategoryState({ category: cat, productCount: referencing })
+    // Designs in the category or in any of its subcategories block the delete; empty subcategories go with it.
+    const subs = subcategories.filter(s => s.categoryId === cat.id), subIds = new Set(subs.map(s => s.id))
+    const referencing = activeProducts.filter(p => p.categoryId === cat.id || subIds.has(p.subcategoryId)).length
+    setDeletingCategoryState({ category: cat, productCount: referencing, subcategoryNames: subs.map(s => s.name) })
   }
 
   const handleStartDeleteSubcategory = (sub: Subcategory) => {
@@ -414,14 +419,14 @@ export function Taxonomy({
                         >
                           ✏️ Rename
                         </button>
-                        <button
+                        {canDelete && (<button
                           type="button"
                           className="quiet"
                           style={{ minHeight: '32px', padding: '0 10px', fontSize: '12px', color: 'var(--danger)', borderColor: 'var(--danger)' }}
                           onClick={() => handleStartDeleteCategory(c)}
                         >
                           🗑️ Delete
-                        </button>
+                        </button>)}
                       </div>
                     </div>
 
@@ -445,7 +450,7 @@ export function Taxonomy({
                                 >
                                   ✏️
                                 </button>
-                                <button
+                                {canDelete && (<button
                                   type="button"
                                   className="quiet"
                                   style={{ minHeight: '24px', padding: '0 6px', fontSize: '11px', border: 'none', color: 'var(--danger)' }}
@@ -453,7 +458,7 @@ export function Taxonomy({
                                   title="Delete subcategory"
                                 >
                                   🗑️
-                                </button>
+                                </button>)}
                               </div>
                             </div>
                           )
@@ -516,6 +521,7 @@ export function Taxonomy({
         <DeleteCategoryModal
           category={deletingCategoryState.category}
           productCount={deletingCategoryState.productCount}
+          subcategoryNames={deletingCategoryState.subcategoryNames}
           onConfirm={async () => {
             await onDeleteCategory(deletingCategoryState.category.id)
             setDeletingCategoryState(null)

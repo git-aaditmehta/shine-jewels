@@ -81,12 +81,16 @@ export function EditCategoryModal({ category, existingCategories, onSave, onClos
 interface DeleteCategoryModalProps {
   category: Category
   productCount: number
+  /** Names of the (design-free) subcategories that are deleted together with the category. */
+  subcategoryNames?: string[]
   onConfirm: () => Promise<void>
   onClose: () => void
 }
 
-export function DeleteCategoryModal({ category, productCount, onConfirm, onClose }: DeleteCategoryModalProps) {
+export function DeleteCategoryModal({ category, productCount, subcategoryNames = [], onConfirm, onClose }: DeleteCategoryModalProps) {
   const [deleting, setDeleting] = useState(false)
+  // Deleting the subcategories too needs the owner's explicit approval.
+  const [approved, setApproved] = useState(subcategoryNames.length === 0)
   const [error, setError] = useState('')
 
   const handleConfirm = async () => {
@@ -126,7 +130,7 @@ export function DeleteCategoryModal({ category, productCount, onConfirm, onClose
                 ⚠️ Active Catalogue Dependency Detected
               </strong>
               <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.5, color: 'var(--ink)' }}>
-                This category is currently referenced by <strong>{productCount} active design(s)</strong> in your sales catalogue. To maintain catalogue integrity, you cannot delete a category that has designs in it. Please delete or reassign those designs first.
+                This category can't be deleted because it has <strong>{productCount} design(s)</strong> in it (including designs in its subcategories). Delete or move those designs first.
               </p>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-3)' }}>
@@ -140,8 +144,20 @@ export function DeleteCategoryModal({ category, productCount, onConfirm, onClose
             <p style={{ fontSize: '14px', lineHeight: 1.6, color: 'var(--ink)' }}>
               Are you sure you want to <strong>permanently delete</strong> category <strong>{category.name}</strong>?
             </p>
+            {subcategoryNames.length > 0 && (
+              <div style={{ padding: '12px 14px', background: 'rgba(239,68,68,0.08)', border: '1px solid var(--danger)', borderRadius: '10px', marginTop: '10px' }}>
+                <strong style={{ color: 'var(--danger)', display: 'block', marginBottom: '6px', fontSize: '13px' }}>
+                  ⚠️ These {subcategoryNames.length} subcategor{subcategoryNames.length === 1 ? 'y' : 'ies'} inside it will also be deleted:
+                </strong>
+                <p style={{ margin: '0 0 10px', fontSize: '13px', color: 'var(--ink)' }}>{subcategoryNames.join(', ')}</p>
+                <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '13px', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={approved} onChange={e => setApproved(e.target.checked)} style={{ marginTop: '2px' }} />
+                  <span>I approve deleting this category <strong>and all {subcategoryNames.length} subcategories</strong> inside it.</span>
+                </label>
+              </div>
+            )}
             <p className="muted" style={{ fontSize: '13px', lineHeight: 1.5, marginTop: '8px' }}>
-              This category has 0 designs attached. It will be completely removed from the cloud and all devices. This action <strong>cannot be undone</strong>.
+              This category has 0 designs. It will be removed from the cloud and all devices. This action <strong>cannot be undone</strong>.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', marginTop: 'var(--space-4)' }}>
               <button type="button" className="quiet" onClick={onClose} disabled={deleting}>
@@ -152,7 +168,7 @@ export function DeleteCategoryModal({ category, productCount, onConfirm, onClose
                 className="primary"
                 style={{ background: 'var(--danger)', borderColor: 'var(--danger)', color: '#fff' }}
                 onClick={handleConfirm}
-                disabled={deleting}
+                disabled={deleting || !approved}
               >
                 {deleting ? 'Deleting…' : '🗑️ Delete Category'}
               </button>

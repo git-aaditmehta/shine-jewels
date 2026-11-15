@@ -659,54 +659,44 @@ export async function createBothOrderPdfs(rawOrder: Order): Promise<OrderPdfsRes
   return { client, manufacturer }
 }
 
-async function resolveHighResImageForDemo(product: Product): Promise<{ dataUrl: string; width: number; height: number; format: 'PNG' | 'JPEG' } | null> {
+/** Longest side of a photo placed in the sales demo PDF: ~210 dpi across the 174×219 mm photo frame, sharp in print. */
+const DEMO_MAX_SIDE = 1800
+const DEMO_JPEG_QUALITY = 0.85
+
+/**
+ * One design's photo for the sales demo PDF, resized to print size and kept as compact JPEG bytes. Photos are processed
+ * one at a time and every intermediate picture is released before the next, so memory stays low however many designs
+ * are selected (the full-size photo and a base64 copy of it used to be kept for every page).
+ */
+async function resolveHighResImageForDemo(product: Product): Promise<{ data: Uint8Array; width: number; height: number; format: 'JPEG' } | null> {
+  // High-res from this device; if it is not downloaded yet, fetch it now (online) — otherwise use the thumbnail.
+  let blob = await imageStore.blob(product, 'detail')
+  if (!blob && await imageStore.ensure(product, ['detail'])) blob = await imageStore.blob(product, 'detail')
+  if (!blob) blob = await imageStore.blob(product, 'thumb')
+  if (!blob && await imageStore.ensure(product, ['thumb'])) blob = await imageStore.blob(product, 'thumb')
+  if (!blob) return null
+  let bitmap: ImageBitmap | null = null
+  const canvas = document.createElement('canvas')
   try {
-    // High-res from this device; if it is not downloaded yet, fetch it now (online) — otherwise use the thumbnail.
-    let source = await imageStore.dataUrl(product, 'detail')
-    if (!source && await imageStore.ensure(product, ['detail'])) source = await imageStore.dataUrl(product, 'detail')
-    if (!source) source = await imageStore.dataUrl(product, 'thumb')
-    if (!source && await imageStore.ensure(product, ['thumb'])) source = await imageStore.dataUrl(product, 'thumb')
-
-    if (!source) return null
-
-    return new Promise((resolve) => {
-      const img = new Image()
-      if (source!.startsWith('http://') || source!.startsWith('https://')) {
-        img.crossOrigin = 'anonymous'
-      }
-      img.onload = () => {
-        try {
-          const w = img.naturalWidth || 800
-          const h = img.naturalHeight || 800
-          const format: 'PNG' | 'JPEG' = source!.startsWith('data:image/png') ? 'PNG' : 'JPEG'
-          if (source!.startsWith('data:image/')) {
-            resolve({ dataUrl: source!, width: w, height: h, format })
-            return
-          }
-          const canvas = document.createElement('canvas')
-          canvas.width = w
-          canvas.height = h
-          const ctx = canvas.getContext('2d')
-          if (!ctx) {
-            resolve(null)
-            return
-          }
-          ctx.drawImage(img, 0, 0, w, h)
-          resolve({
-            dataUrl: canvas.toDataURL('image/jpeg', 0.92),
-            width: w,
-            height: h,
-            format: 'JPEG',
-          })
-        } catch {
-          resolve(null)
-        }
-      }
-      img.onerror = () => resolve(null)
-      img.src = source!
-    })
+    bitmap = await createImageBitmap(blob)
+    const scale = Math.min(1, DEMO_MAX_SIDE / Math.max(bitmap.width, bitmap.height))
+    const width = Math.max(1, Math.round(bitmap.width * scale)), height = Math.max(1, Math.round(bitmap.height * scale))
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(bitmap, 0, 0, width, height)
+    const jpeg = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', DEMO_JPEG_QUALITY))
+    if (!jpeg) return null
+    return { data: new Uint8Array(await jpeg.arrayBuffer()), width, height, format: 'JPEG' }
   } catch {
     return null
+  } finally {
+    bitmap?.close()
+    // Safari keeps a canvas's pixel memory until its size is reset.
+    canvas.width = 0
+    canvas.height = 0
   }
 }
 
@@ -743,6 +733,8 @@ export async function createSalesDemoPdfBlob(
   for (let index = 0; index < products.length; index++) {
     const product = products[index]
     onProgress?.(index + 1, products.length)
+    // Let the screen update and the browser reclaim the previous page's pictures before the next one.
+    if (index > 0) await new Promise(resolve => setTimeout(resolve, 0))
 
     if (index > 0) {
       pdf.addPage()
@@ -821,7 +813,7 @@ export async function createSalesDemoPdfBlob(
         const imgX = frameX + (frameW - renderW) / 2
         const imgY = frameY + (frameH - renderH) / 2
 
-        pdf.addImage(imgInfo.dataUrl, imgInfo.format, imgX, imgY, renderW, renderH, undefined, 'FAST')
+        pdf.addImage(imgInfo.data, imgInfo.format, imgX, imgY, renderW, renderH, undefined, 'FAST')
       } catch (err) {
         console.warn('Failed to render demo image:', err)
         pdf.setFontSize(11)

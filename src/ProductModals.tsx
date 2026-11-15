@@ -94,7 +94,11 @@ export function EditProductModal({
         const dual = await processDualImages(replacementFile)
         gridImage = dual.gridImage
         detailImage = dual.detailImage
-        imageVersion += 1
+        // Next version after the highest one in use: the cloud copy may already be at a higher version than this
+        // device recorded (older app versions never saved it in the cloud), and the new photo must never reuse — and so
+        // overwrite — the current photo's cloud file.
+        const keyVersion = (key?: string) => Number(key?.match(/\/v(\d+)\//)?.[1] || 0)
+        imageVersion = Math.max(imageVersion, keyVersion(product.gridImageKey), keyVersion(product.detailImageKey)) + 1
         // Reset remote keys to force direct upload of the new version
         gridImageKey = undefined
         detailImageKey = undefined
